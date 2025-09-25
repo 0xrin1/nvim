@@ -226,8 +226,7 @@ function M.open()
     vim.api.nvim_set_option_value("winhighlight", "CursorLine:CursorLine", { scope = "local", win = diff_win })
   end
 
-  vim.keymap.set("n", "<leader>ac", ":ClaudeCodeAdd %<CR>", { buffer = diff_buf, noremap = true, silent = true, desc = "Add diff to Claude" })
-  vim.keymap.set("v", "<leader>as", "<cmd>ClaudeCodeSend<CR>", { buffer = diff_buf, noremap = true, silent = true, desc = "Send selection to Claude" })
+  
 
   local row_to_info = {}
   local path_to_entry = {}

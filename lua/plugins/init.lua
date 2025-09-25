@@ -13,6 +13,5 @@ return {
   require("plugins.copilot"),
   require("plugins.copilot_cmp"),
   require("plugins.toggleterm"),
-  require("plugins.claudecode"),
   { "leafgarland/typescript-vim" },
 }
