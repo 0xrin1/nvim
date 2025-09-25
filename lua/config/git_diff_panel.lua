@@ -1,5 +1,98 @@
 local M = {}
 
+local highlight_ns = vim.api.nvim_create_namespace("GitDiffPanelHighlights")
+local virt_ns = vim.api.nvim_create_namespace("GitDiffPanelVirtText")
+
+local function hex_to_rgb(color)
+  color = color:gsub("#", "")
+  if #color ~= 6 then
+    return 0, 0, 0
+  end
+  return tonumber(color:sub(1, 2), 16), tonumber(color:sub(3, 4), 16), tonumber(color:sub(5, 6), 16)
+end
+
+local function rgb_to_hex(r, g, b)
+  return string.format("#%02x%02x%02x", r, g, b)
+end
+
+local function blend_colors(fg, bg, alpha)
+  local fr, fg_, fb = hex_to_rgb(fg)
+  local br, bg_, bb = hex_to_rgb(bg)
+  local function mix(f, b)
+    return math.floor((alpha * f) + ((1 - alpha) * b) + 0.5)
+  end
+  return rgb_to_hex(mix(fr, br), mix(fg_, bg_), mix(fb, bb))
+end
+
+local function render_diff_buffer(buf, diff_lines)
+  local display_lines = {}
+  local line_meta = {}
+  local filetype
+  local current_path
+
+  for _, line in ipairs(diff_lines) do
+    if line:match("^diff %-%-git") or line:match("^index ") or line:match("^@@") or line:match("^[-+]{3}") then
+      table.insert(display_lines, line)
+      line_meta[#display_lines] = "header"
+      local path = line:match("^%+%+%+ b/(.+)$") or line:match("^%-%-%- a/(.+)$")
+      if path and path ~= "/dev/null" then
+        current_path = path
+        local ft = vim.filetype.match({ filename = path })
+        if ft then
+          filetype = ft
+        end
+      end
+    elseif vim.startswith(line, "+") and not vim.startswith(line, "+++") then
+      table.insert(display_lines, line:sub(2))
+      line_meta[#display_lines] = "add"
+    elseif vim.startswith(line, "-") and not vim.startswith(line, "---") then
+      table.insert(display_lines, line:sub(2))
+      line_meta[#display_lines] = "remove"
+    elseif vim.startswith(line, " ") then
+      table.insert(display_lines, line:sub(2))
+      line_meta[#display_lines] = "context"
+    else
+      table.insert(display_lines, line)
+      line_meta[#display_lines] = "header"
+    end
+  end
+
+  if #display_lines == 0 then
+    display_lines = { "(no changes)" }
+    line_meta[1] = "header"
+  end
+
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, display_lines)
+  vim.api.nvim_buf_clear_namespace(buf, highlight_ns, 0, -1)
+  vim.api.nvim_buf_clear_namespace(buf, virt_ns, 0, -1)
+
+  for idx, kind in ipairs(line_meta) do
+    local lnum = idx - 1
+    if kind == "add" then
+      vim.api.nvim_buf_add_highlight(buf, highlight_ns, "GitDiffAddLine", lnum, 0, -1)
+      vim.api.nvim_buf_set_extmark(buf, virt_ns, lnum, 0, {
+        virt_text = { { "+", "GitAdded" } },
+        virt_text_pos = "inline",
+      })
+    elseif kind == "remove" then
+      vim.api.nvim_buf_add_highlight(buf, highlight_ns, "GitDiffDeleteLine", lnum, 0, -1)
+      vim.api.nvim_buf_set_extmark(buf, virt_ns, lnum, 0, {
+        virt_text = { { "-", "GitRemoved" } },
+        virt_text_pos = "inline",
+      })
+    elseif kind == "header" then
+      vim.api.nvim_buf_add_highlight(buf, highlight_ns, "Title", lnum, 0, -1)
+    end
+  end
+
+  if filetype then
+    vim.api.nvim_set_option_value("filetype", filetype, { buf = buf })
+    pcall(vim.treesitter.start, buf, filetype)
+  else
+    vim.api.nvim_set_option_value("filetype", "diff", { buf = buf })
+  end
+end
+
 function M.open()
   local api = require("nvim-tree.api")
 
@@ -25,18 +118,70 @@ function M.open()
   vim.cmd('hi GitAdded guifg=' .. palette.green)
   vim.cmd('hi GitRemoved guifg=' .. palette.red)
 
-  vim.fn.matchadd('GitAdded', '\\v\\+\\d+')
-  vim.fn.matchadd('GitRemoved', '\\v-\\d+')
+  local base = vim.api.nvim_get_hl_by_name("Normal", true)
+  local normal_bg = base.background and string.format("#%06x", base.background) or "#1e1e2e"
+
+  local blended_green = blend_colors(palette.green, normal_bg, 0.18)
+  local blended_red = blend_colors(palette.red, normal_bg, 0.22)
+
+  vim.api.nvim_set_hl(0, "GitDiffAddLine", {
+    bg = blended_green,
+    fg = "NONE",
+    default = true,
+  })
+  vim.api.nvim_set_hl(0, "GitDiffDeleteLine", {
+    bg = blended_red,
+    fg = "NONE",
+    default = true,
+  })
+  vim.api.nvim_set_hl(0, "DiffDelete", { fg = palette.red, bg = "NONE", default = true })
+  vim.api.nvim_set_hl(0, "diffAdded", { link = "Normal", default = true })
+  vim.api.nvim_set_hl(0, "diffRemoved", { link = "DiffDelete", default = true })
+
+  vim.fn.matchadd('GitAdded', [[\v\+\d+]], 100)
+  vim.fn.matchadd('GitRemoved', [[\v-\d+]], 100)
 
   vim.cmd("wincmd l")
   vim.cmd("enew")
   local diff_buf = vim.api.nvim_get_current_buf()
-  vim.opt_local.filetype = "diff"
   vim.opt_local.buftype = "nofile"
   vim.opt_local.bufhidden = "wipe"
   vim.opt_local.swapfile = false
+  vim.opt_local.wrap = false
+  vim.opt_local.signcolumn = "no"
+
+  local function update_diff()
+    local diff_output = vim.fn.systemlist("git diff HEAD -M")
+    local untracked = vim.fn.systemlist("git ls-files --others --exclude-standard")
+
+    for _, untracked_file in ipairs(untracked) do
+      if untracked_file ~= "" then
+        local file_type = vim.fn.system("file -b " .. vim.fn.shellescape(untracked_file)):gsub("\n", "")
+        table.insert(diff_output, "diff --git a/" .. untracked_file .. " b/" .. untracked_file)
+        table.insert(diff_output, "new file mode 100644")
+        if file_type:find("text") then
+          local file_lines = vim.fn.systemlist("cat " .. vim.fn.shellescape(untracked_file))
+          table.insert(diff_output, "--- /dev/null")
+          table.insert(diff_output, "+++ b/" .. untracked_file)
+          table.insert(diff_output, "@@ -0,0 +1," .. #file_lines .. " @@")
+          for _, fline in ipairs(file_lines) do
+            table.insert(diff_output, "+" .. fline)
+          end
+        else
+          table.insert(diff_output, "Binary files /dev/null and b/" .. untracked_file .. " differ")
+        end
+      end
+    end
+
+    render_diff_buffer(diff_buf, diff_output)
+  end
+
+  update_diff()
 
   local diff_win = vim.fn.bufwinid(diff_buf)
+  if diff_win ~= -1 then
+    vim.api.nvim_set_option_value("winhighlight", "CursorLine:CursorLine", { scope = "local", win = diff_win })
+  end
 
   vim.keymap.set("n", "<leader>ac", ":ClaudeCodeAdd %<CR>", { buffer = diff_buf, noremap = true, silent = true, desc = "Add diff to Claude" })
   vim.keymap.set("v", "<leader>as", "<cmd>ClaudeCodeSend<CR>", { buffer = diff_buf, noremap = true, silent = true, desc = "Send selection to Claude" })
@@ -141,33 +286,7 @@ function M.open()
     end
 
     if vim.api.nvim_buf_is_valid(diff_buf) then
-      local diff_output = vim.fn.systemlist("git diff HEAD -M")
-      local untracked = vim.fn.systemlist("git ls-files --others --exclude-standard")
-      for _, untracked_file in ipairs(untracked) do
-        if untracked_file ~= "" then
-          local file_type = vim.fn.system("file -b " .. vim.fn.shellescape(untracked_file)):gsub("\n", "")
-          table.insert(diff_output, "diff --git a/" .. untracked_file .. " b/" .. untracked_file)
-          table.insert(diff_output, "new file mode 100644")
-          if file_type:find("text") then
-            local file_lines = vim.fn.systemlist("cat " .. vim.fn.shellescape(untracked_file))
-            table.insert(diff_output, "--- /dev/null")
-            table.insert(diff_output, "+++ b/" .. untracked_file)
-            table.insert(diff_output, "@@ -0,0 +1," .. #file_lines .. " @@")
-            for _, fline in ipairs(file_lines) do
-              table.insert(diff_output, "+" .. fline)
-            end
-          else
-            table.insert(diff_output, "Binary files /dev/null and b/" .. untracked_file .. " differ")
-          end
-        end
-      end
-      vim.api.nvim_buf_set_lines(diff_buf, 0, -1, false, diff_output)
-      local diff_win_refresh = vim.fn.bufwinid(diff_buf)
-      if diff_win_refresh ~= -1 then
-        vim.api.nvim_win_call(diff_win_refresh, function()
-          vim.cmd('normal zR')
-        end)
-      end
+      update_diff()
     end
   end
 
@@ -210,10 +329,7 @@ function M.open()
             diff_output = vim.fn.systemlist("git diff HEAD -- " .. vim.fn.shellescape(path))
           end
         end
-        vim.api.nvim_buf_set_lines(0, 0, -1, false, diff_output)
-        vim.opt_local.filetype = "diff"
-        vim.cmd("normal gg")
-        vim.cmd("normal zR")
+        render_diff_buffer(diff_buf, diff_output)
       end
     end
   end
