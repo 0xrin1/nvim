@@ -2,29 +2,20 @@ return {
   "neovim/nvim-lspconfig",
   dependencies = { "williamboman/mason-lspconfig.nvim" },
   config = function()
-    local lspconfig = require("lspconfig")
     local capabilities = require("cmp_nvim_lsp").default_capabilities()
 
-    lspconfig.ts_ls.setup({
-      capabilities = capabilities,
-      filetypes = { "javascript", "javascriptreact", "typescript", "typescriptreact" },
-      root_dir = lspconfig.util.root_pattern("package.json", "tsconfig.json", ".git"),
-    })
+    local servers = {
+      ts_ls = {},
+      rust_analyzer = {},
+      pyright = {},
+    }
 
-    lspconfig.rust_analyzer.setup({
-      capabilities = capabilities,
-      filetypes = { "rust" },
-      root_dir = lspconfig.util.root_pattern("Cargo.toml", ".git"),
-      settings = {
-        ["rust-analyzer"] = {},
-      },
-    })
+    for name, opts in pairs(servers) do
+      local merged = vim.tbl_deep_extend("force", { capabilities = vim.deepcopy(capabilities) }, opts or {})
+      vim.lsp.config(name, merged)
+    end
 
-    lspconfig.pyright.setup({
-      capabilities = capabilities,
-      filetypes = { "python" },
-      root_dir = lspconfig.util.root_pattern("pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile", ".git"),
-    })
+    vim.lsp.enable(vim.tbl_keys(servers))
 
     vim.api.nvim_create_autocmd("LspAttach", {
       group = vim.api.nvim_create_augroup("UserLspConfig", {}),

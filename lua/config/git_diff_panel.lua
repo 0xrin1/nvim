@@ -24,24 +24,30 @@ local function blend_colors(fg, bg, alpha)
   return rgb_to_hex(mix(fr, br), mix(fg_, bg_), mix(fb, bb))
 end
 
-local function render_diff_buffer(buf, diff_lines)
+local function render_diff_buffer(buf, diff_lines, opts)
+  opts = opts or {}
   local display_lines = {}
   local line_meta = {}
-  local filetype
-  local current_path
+  local filetype = opts.filetype
+  local current_path = opts.path
+
+  local function maybe_apply_file(path)
+    if not path or path == "/dev/null" then
+      return
+    end
+    current_path = path
+    local ft = vim.filetype.match({ filename = path })
+    if ft and ft ~= "diff" then
+      filetype = ft
+    end
+  end
 
   for _, line in ipairs(diff_lines) do
     if line:match("^diff %-%-git") or line:match("^index ") or line:match("^@@") or line:match("^[-+]{3}") then
       table.insert(display_lines, line)
       line_meta[#display_lines] = "header"
       local path = line:match("^%+%+%+ b/(.+)$") or line:match("^%-%-%- a/(.+)$")
-      if path and path ~= "/dev/null" then
-        current_path = path
-        local ft = vim.filetype.match({ filename = path })
-        if ft then
-          filetype = ft
-        end
-      end
+      maybe_apply_file(path)
     elseif vim.startswith(line, "+") and not vim.startswith(line, "+++") then
       table.insert(display_lines, line:sub(2))
       line_meta[#display_lines] = "add"
@@ -66,20 +72,30 @@ local function render_diff_buffer(buf, diff_lines)
   vim.api.nvim_buf_clear_namespace(buf, highlight_ns, 0, -1)
   vim.api.nvim_buf_clear_namespace(buf, virt_ns, 0, -1)
 
+  local function apply_backdrop(lnum, hl_group)
+    vim.api.nvim_buf_set_extmark(buf, highlight_ns, lnum, 0, {
+      hl_group = hl_group,
+      hl_eol = true,
+      hl_mode = "combine",
+    })
+  end
+
   for idx, kind in ipairs(line_meta) do
     local lnum = idx - 1
     if kind == "add" then
-      vim.api.nvim_buf_add_highlight(buf, highlight_ns, "GitDiffAddLine", lnum, 0, -1)
+      apply_backdrop(lnum, "GitDiffAddBackdrop")
       vim.api.nvim_buf_set_extmark(buf, virt_ns, lnum, 0, {
         virt_text = { { "+", "GitAdded" } },
         virt_text_pos = "inline",
       })
     elseif kind == "remove" then
-      vim.api.nvim_buf_add_highlight(buf, highlight_ns, "GitDiffDeleteLine", lnum, 0, -1)
+      apply_backdrop(lnum, "GitDiffDeleteBackdrop")
       vim.api.nvim_buf_set_extmark(buf, virt_ns, lnum, 0, {
         virt_text = { { "-", "GitRemoved" } },
         virt_text_pos = "inline",
       })
+    elseif kind == "context" then
+      apply_backdrop(lnum, "GitDiffContextBackdrop")
     elseif kind == "header" then
       vim.api.nvim_buf_add_highlight(buf, highlight_ns, "Title", lnum, 0, -1)
     end
@@ -91,6 +107,8 @@ local function render_diff_buffer(buf, diff_lines)
   else
     vim.api.nvim_set_option_value("filetype", "diff", { buf = buf })
   end
+
+  return filetype, current_path
 end
 
 function M.open()
@@ -120,18 +138,21 @@ function M.open()
 
   local base = vim.api.nvim_get_hl_by_name("Normal", true)
   local normal_bg = base.background and string.format("#%06x", base.background) or "#1e1e2e"
+  local normal_fg = base.foreground and string.format("#%06x", base.foreground) or palette.text
 
   local blended_green = blend_colors(palette.green, normal_bg, 0.18)
   local blended_red = blend_colors(palette.red, normal_bg, 0.22)
 
-  vim.api.nvim_set_hl(0, "GitDiffAddLine", {
+  vim.api.nvim_set_hl(0, "GitDiffAddBackdrop", {
     bg = blended_green,
-    fg = "NONE",
     default = true,
   })
-  vim.api.nvim_set_hl(0, "GitDiffDeleteLine", {
+  vim.api.nvim_set_hl(0, "GitDiffDeleteBackdrop", {
     bg = blended_red,
-    fg = "NONE",
+    default = true,
+  })
+  vim.api.nvim_set_hl(0, "GitDiffContextBackdrop", {
+    bg = blend_colors(palette.surface0, normal_bg, 0.18),
     default = true,
   })
   vim.api.nvim_set_hl(0, "DiffDelete", { fg = palette.red, bg = "NONE", default = true })
@@ -149,6 +170,18 @@ function M.open()
   vim.opt_local.swapfile = false
   vim.opt_local.wrap = false
   vim.opt_local.signcolumn = "no"
+
+  local function resolve_filetype(path)
+    if not path or path == "" then
+      return nil
+    end
+    local ft = vim.filetype.match({ filename = path })
+    if ft == nil or ft == "diff" then
+      return nil
+    end
+    return ft
+  end
+
 
   local function update_diff()
     local diff_output = vim.fn.systemlist("git diff HEAD -M")
@@ -173,8 +206,9 @@ function M.open()
       end
     end
 
-    render_diff_buffer(diff_buf, diff_output)
+    render_diff_buffer(diff_buf, diff_output, { filetype = resolve_filetype(current_path) })
   end
+
 
   update_diff()
 
@@ -312,6 +346,7 @@ function M.open()
       if entry.type == "file" or entry.type == "binary" then
         vim.cmd("wincmd l")
         local diff_output = {}
+        local override_ft = resolve_filetype(path)
         if entry.type == "binary" then
           table.insert(diff_output, "Binary file differs")
         else
@@ -329,7 +364,7 @@ function M.open()
             diff_output = vim.fn.systemlist("git diff HEAD -- " .. vim.fn.shellescape(path))
           end
         end
-        render_diff_buffer(diff_buf, diff_output)
+        render_diff_buffer(diff_buf, diff_output, { filetype = override_ft })
       end
     end
   end
