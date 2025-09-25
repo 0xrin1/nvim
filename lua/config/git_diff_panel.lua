@@ -72,35 +72,29 @@ local function render_diff_buffer(buf, diff_lines, opts)
   vim.api.nvim_buf_clear_namespace(buf, highlight_ns, 0, -1)
   vim.api.nvim_buf_clear_namespace(buf, virt_ns, 0, -1)
 
-  local function apply_backdrop(lnum, hl_group)
-    vim.api.nvim_buf_set_extmark(buf, highlight_ns, lnum, 0, {
-      hl_group = hl_group,
-      hl_eol = true,
-      hl_mode = "combine",
-    })
-  end
-
   for idx, kind in ipairs(line_meta) do
     local lnum = idx - 1
     if kind == "add" then
-      apply_backdrop(lnum, "GitDiffAddBackdrop")
+      vim.api.nvim_buf_add_highlight(buf, highlight_ns, "GitDiffAddBackdrop", lnum, 0, -1)
       vim.api.nvim_buf_set_extmark(buf, virt_ns, lnum, 0, {
         virt_text = { { "+", "GitAdded" } },
         virt_text_pos = "inline",
       })
     elseif kind == "remove" then
-      apply_backdrop(lnum, "GitDiffDeleteBackdrop")
+      vim.api.nvim_buf_add_highlight(buf, highlight_ns, "GitDiffDeleteBackdrop", lnum, 0, -1)
       vim.api.nvim_buf_set_extmark(buf, virt_ns, lnum, 0, {
         virt_text = { { "-", "GitRemoved" } },
         virt_text_pos = "inline",
       })
     elseif kind == "context" then
-      apply_backdrop(lnum, "GitDiffContextBackdrop")
+      vim.api.nvim_buf_add_highlight(buf, highlight_ns, "GitDiffContextBackdrop", lnum, 0, -1)
     elseif kind == "header" then
+      vim.api.nvim_buf_add_highlight(buf, highlight_ns, "GitDiffContextBackdrop", lnum, 0, -1)
       vim.api.nvim_buf_add_highlight(buf, highlight_ns, "Title", lnum, 0, -1)
     end
   end
 
+  -- Treesitter
   if filetype then
     vim.api.nvim_set_option_value("filetype", filetype, { buf = buf })
     pcall(vim.treesitter.start, buf, filetype)
@@ -155,6 +149,9 @@ function M.open()
     bg = blend_colors(palette.surface0, normal_bg, 0.18),
     default = true,
   })
+  vim.api.nvim_set_hl(0, "GitDiffAddText", { fg = palette.text, default = true })
+  vim.api.nvim_set_hl(0, "GitDiffDeleteText", { fg = palette.text, default = true })
+  vim.api.nvim_set_hl(0, "GitDiffContextText", { fg = palette.overlay2, default = true })
   vim.api.nvim_set_hl(0, "DiffDelete", { fg = palette.red, bg = "NONE", default = true })
   vim.api.nvim_set_hl(0, "diffAdded", { link = "Normal", default = true })
   vim.api.nvim_set_hl(0, "diffRemoved", { link = "DiffDelete", default = true })
