@@ -1,0 +1,17 @@
+return {
+  require("plugins.telescope"),
+  require("plugins.nvimtree"),
+  require("plugins.gitsigns"),
+  require("plugins.diffview"),
+  require("plugins.fugitive"),
+  require("plugins.catppuccin"),
+  require("plugins.cuda"),
+  require("plugins.mason"),
+  require("plugins.mason_lspconfig"),
+  require("plugins.lspconfig"),
+  require("plugins.cmp"),
+  require("plugins.copilot"),
+  require("plugins.copilot_cmp"),
+  require("plugins.toggleterm"),
+  require("plugins.claudecode"),
+}
