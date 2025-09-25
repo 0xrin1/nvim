@@ -180,7 +180,7 @@ function M.open()
   end
 
 
-  local function update_diff()
+  local function update_diff(initial_path)
     local diff_output = vim.fn.systemlist("git diff HEAD -M")
     local untracked = vim.fn.systemlist("git ls-files --others --exclude-standard")
 
@@ -203,11 +203,19 @@ function M.open()
       end
     end
 
-    render_diff_buffer(diff_buf, diff_output, { filetype = resolve_filetype(current_path) })
+    return render_diff_buffer(diff_buf, diff_output, { filetype = resolve_filetype(initial_path) })
   end
 
 
-  update_diff()
+  local function pick_latest_path()
+    local commits = vim.fn.systemlist("git log -1 --name-only --pretty=format:%n")
+    for _, path in ipairs(commits) do
+      if path ~= "" then
+        return path
+      end
+    end
+  end
+
 
   local diff_win = vim.fn.bufwinid(diff_buf)
   if diff_win ~= -1 then
@@ -218,6 +226,8 @@ function M.open()
   vim.keymap.set("v", "<leader>as", "<cmd>ClaudeCodeSend<CR>", { buffer = diff_buf, noremap = true, silent = true, desc = "Send selection to Claude" })
 
   local row_to_info = {}
+  local path_to_entry = {}
+  local resolved_path = nil
 
   local uv = vim.loop
   local last_refresh = 0
@@ -308,6 +318,7 @@ function M.open()
             end
             table.insert(lines, line)
             row_to_info[#lines] = { path = full_path, entry = child }
+            path_to_entry[full_path] = child
           end
         end
       end
@@ -315,13 +326,52 @@ function M.open()
 
       vim.api.nvim_buf_set_lines(panel_buf, 0, -1, false, lines)
     end
-
-    if vim.api.nvim_buf_is_valid(diff_buf) then
-      update_diff()
-    end
   end
 
   refresh()
+
+  local function load_diff_for_path(path, entry)
+    if not path or not entry then
+      return
+    end
+    resolved_path = path
+    vim.cmd("wincmd l")
+    local diff_output = {}
+    local override_ft = resolve_filetype(path)
+    if entry.type == "binary" then
+      table.insert(diff_output, "Binary file differs")
+    else
+      if entry.is_untracked then
+        local file_lines = vim.fn.systemlist("cat " .. vim.fn.shellescape(path))
+        table.insert(diff_output, "diff --git a/" .. path .. " b/" .. path)
+        table.insert(diff_output, "new file mode 100644")
+        table.insert(diff_output, "--- /dev/null")
+        table.insert(diff_output, "+++ b/" .. path)
+        table.insert(diff_output, "@@ -0,0 +1," .. #file_lines .. " @@")
+        for _, fline in ipairs(file_lines) do
+          table.insert(diff_output, "+" .. fline)
+        end
+      else
+        diff_output = vim.fn.systemlist("git diff HEAD -- " .. vim.fn.shellescape(path))
+      end
+    end
+    render_diff_buffer(diff_buf, diff_output, { filetype = override_ft })
+  end
+
+  local function load_initial_diff()
+    local target_path = pick_latest_path()
+    if target_path and path_to_entry[target_path] then
+      load_diff_for_path(target_path, path_to_entry[target_path])
+    else
+      -- Fallback to first available diff entry
+      local first = row_to_info[1]
+      if first then
+        load_diff_for_path(first.path, first.entry)
+      end
+    end
+  end
+
+  load_initial_diff()
 
   local function load_file_diff(use_mouse_pos)
     local row
@@ -338,31 +388,7 @@ function M.open()
     end
     local info = row_to_info[row]
     if info then
-      local path = info.path
-      local entry = info.entry
-      if entry.type == "file" or entry.type == "binary" then
-        vim.cmd("wincmd l")
-        local diff_output = {}
-        local override_ft = resolve_filetype(path)
-        if entry.type == "binary" then
-          table.insert(diff_output, "Binary file differs")
-        else
-          if entry.is_untracked then
-            local file_lines = vim.fn.systemlist("cat " .. vim.fn.shellescape(path))
-            table.insert(diff_output, "diff --git a/" .. path .. " b/" .. path)
-            table.insert(diff_output, "new file mode 100644")
-            table.insert(diff_output, "--- /dev/null")
-            table.insert(diff_output, "+++ b/" .. path)
-            table.insert(diff_output, "@@ -0,0 +1," .. #file_lines .. " @@")
-            for _, fline in ipairs(file_lines) do
-              table.insert(diff_output, "+" .. fline)
-            end
-          else
-            diff_output = vim.fn.systemlist("git diff HEAD -- " .. vim.fn.shellescape(path))
-          end
-        end
-        render_diff_buffer(diff_buf, diff_output, { filetype = override_ft })
-      end
+      load_diff_for_path(info.path, info.entry)
     end
   end
 
