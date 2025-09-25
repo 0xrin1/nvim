@@ -95,7 +95,6 @@ local function render_diff_buffer(buf, diff_lines, opts)
     end
   end
 
-  -- Treesitter
   if filetype then
     vim.api.nvim_set_option_value("filetype", filetype, { buf = buf })
     pcall(vim.treesitter.start, buf, filetype)
@@ -192,7 +191,6 @@ function M.open()
     return ft
   end
 
-
   local function update_diff(initial_path)
     local diff_output = vim.fn.systemlist("git diff HEAD -M")
     local untracked = vim.fn.systemlist("git ls-files --others --exclude-standard")
@@ -219,16 +217,9 @@ function M.open()
     return render_diff_buffer(diff_buf, diff_output, { filetype = resolve_filetype(initial_path), path = initial_path })
   end
 
-
   local function pick_latest_path()
-    local commits = vim.fn.systemlist("git log -1 --name-only --pretty=format:%n")
-    for _, path in ipairs(commits) do
-      if path ~= "" then
-        return path
-      end
-    end
+    return nil
   end
-
 
   local diff_win = vim.fn.bufwinid(diff_buf)
   if diff_win ~= -1 then
@@ -244,6 +235,45 @@ function M.open()
 
   local uv = vim.loop
   local last_refresh = 0
+
+  local last_selected_mtime = 0
+  local function get_mtime(path)
+    local st = uv.fs_stat(path)
+    if not st then return 0 end
+    local m = st.mtime
+    if type(m) == "table" then
+      local sec = m.sec or 0
+      local nsec = m.nsec or 0
+      return sec + nsec / 1e9
+    end
+    return m or 0
+  end
+
+  local function focus_row_for_path(path)
+    if not path then return end
+    local winid = vim.fn.bufwinid(panel_buf)
+    if winid ~= -1 and vim.api.nvim_win_is_valid(winid) then
+      for row, info in pairs(row_to_info) do
+        if info.path == path then
+          vim.api.nvim_win_set_cursor(winid, { row, 0 })
+          break
+        end
+      end
+    end
+  end
+
+  local function pick_latest_changed_with_mtime()
+    local best_path, best_m = nil, 0
+    for p, _ in pairs(path_to_entry) do
+      local mt = get_mtime(p)
+      if mt > best_m then
+        best_m = mt
+        best_path = p
+      end
+    end
+    return best_path, best_m
+  end
+
   local function refresh()
     local now = uv.now()
     if now - last_refresh < 500 then return end
@@ -310,6 +340,7 @@ function M.open()
 
       local lines = {}
       row_to_info = {}
+      path_to_entry = {}
       local function build_lines(node, indent, current_path)
         local keys = {}
         for k in pairs(node) do table.insert(keys, k) end
@@ -388,14 +419,17 @@ function M.open()
   end
 
   local function load_initial_diff()
-    local target_path = pick_latest_path()
+    local target_path, mt = pick_latest_changed_with_mtime()
     if target_path and path_to_entry[target_path] then
       load_diff_for_path(target_path, path_to_entry[target_path])
+      focus_row_for_path(target_path)
+      last_selected_mtime = mt or 0
     else
-      -- Fallback to first available diff entry
       local first = row_to_info[1]
       if first then
         load_diff_for_path(first.path, first.entry)
+        focus_row_for_path(first.path)
+        last_selected_mtime = get_mtime(first.path)
       end
     end
   end
@@ -464,9 +498,19 @@ function M.open()
   end, { buffer = tree_buf, silent = true })
 
   local watcher = uv.new_fs_event()
-  watcher:start(vim.fn.getcwd(), { recursive = true }, vim.schedule_wrap(function(err)
+  watcher:start(vim.fn.getcwd(), { recursive = true }, vim.schedule_wrap(function(err, fname, status)
     if err then return end
-    if vim.api.nvim_buf_is_valid(panel_buf) then refresh() end
+    if vim.api.nvim_buf_is_valid(panel_buf) then
+      refresh()
+      local p, mt = pick_latest_changed_with_mtime()
+      if p and path_to_entry[p] then
+        if mt > last_selected_mtime or p ~= resolved_path then
+          load_diff_for_path(p, path_to_entry[p])
+          focus_row_for_path(p)
+          last_selected_mtime = mt
+        end
+      end
+    end
   end))
 
   local group = vim.api.nvim_create_augroup("GitDiffWatcher", { clear = true })
