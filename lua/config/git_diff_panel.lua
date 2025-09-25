@@ -430,6 +430,11 @@ function M.open()
         load_diff_for_path(first.path, first.entry)
         focus_row_for_path(first.path)
         last_selected_mtime = get_mtime(first.path)
+      else
+        -- No changes at open: show placeholder in diff view
+        render_diff_buffer(diff_buf, {}, {})
+        resolved_path = nil
+        last_selected_mtime = 0
       end
     end
   end
@@ -508,6 +513,13 @@ function M.open()
           load_diff_for_path(p, path_to_entry[p])
           focus_row_for_path(p)
           last_selected_mtime = mt
+        end
+      else
+        -- Repo became clean: show "(no changes)" in diff view
+        if vim.api.nvim_buf_is_valid(diff_buf) then
+          render_diff_buffer(diff_buf, {}, {})
+          resolved_path = nil
+          last_selected_mtime = 0
         end
       end
     end
