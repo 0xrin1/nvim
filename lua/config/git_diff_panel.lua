@@ -68,6 +68,7 @@ local function render_diff_buffer(buf, diff_lines, opts)
     line_meta[1] = "header"
   end
 
+  if not vim.api.nvim_buf_is_valid(buf) then return filetype, current_path end
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, display_lines)
   vim.api.nvim_buf_clear_namespace(buf, highlight_ns, 0, -1)
   vim.api.nvim_buf_clear_namespace(buf, virt_ns, 0, -1)
@@ -119,7 +120,7 @@ function M.open()
 
   local panel_buf = vim.api.nvim_get_current_buf()
   vim.opt_local.buftype = "nofile"
-  vim.opt_local.bufhidden = "wipe"
+  vim.opt_local.bufhidden = "hide"
   vim.opt_local.swapfile = false
   vim.opt_local.number = false
   vim.opt_local.relativenumber = false
@@ -158,12 +159,18 @@ function M.open()
 
   vim.fn.matchadd('GitAdded', [[\v\+\d+]], 100)
   vim.fn.matchadd('GitRemoved', [[\v-\d+]], 100)
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    buffer = panel_buf,
+    callback = function()
+      if vim.api.nvim_buf_is_valid(diff_buf) then vim.api.nvim_buf_delete(diff_buf, { force = true }) end
+    end,
+  })
 
   vim.cmd("wincmd l")
   vim.cmd("enew")
   local diff_buf = vim.api.nvim_get_current_buf()
   vim.opt_local.buftype = "nofile"
-  vim.opt_local.bufhidden = "wipe"
+  vim.opt_local.bufhidden = "hide"
   vim.opt_local.swapfile = false
   vim.opt_local.wrap = false
   vim.opt_local.signcolumn = "no"
@@ -242,8 +249,8 @@ function M.open()
     if now - last_refresh < 500 then return end
     last_refresh = now
 
-    if vim.api.nvim_buf_is_valid(panel_buf) then
-      local tree = {}
+    if not (vim.api.nvim_buf_is_valid(panel_buf) and vim.api.nvim_buf_is_loaded(panel_buf)) then return end
+    local tree = {}
       local function split_path(path)
         local parts = {}
         for part in path:gmatch("[^/]+") do
@@ -330,9 +337,9 @@ function M.open()
       end
       build_lines(tree, "", "")
 
+      if not vim.api.nvim_buf_is_valid(panel_buf) then return end
       vim.api.nvim_buf_set_lines(panel_buf, 0, -1, false, lines)
     end
-  end
 
   refresh()
 
@@ -341,7 +348,23 @@ function M.open()
       return
     end
     resolved_path = path
-    vim.cmd("wincmd l")
+    if vim.api.nvim_win_is_valid(diff_win) then
+      vim.api.nvim_set_current_win(diff_win)
+    else
+      vim.cmd("wincmd l")
+    end
+    if not vim.api.nvim_buf_is_valid(diff_buf) then
+      vim.cmd("enew")
+      diff_buf = vim.api.nvim_get_current_buf()
+      vim.opt_local.buftype = "nofile"
+      vim.opt_local.bufhidden = "hide"
+      vim.opt_local.swapfile = false
+      vim.opt_local.wrap = false
+      vim.opt_local.signcolumn = "no"
+    end
+    if vim.api.nvim_get_current_buf() ~= diff_buf then
+      vim.api.nvim_win_set_buf(0, diff_buf)
+    end
     local diff_output = {}
     local override_ft = resolve_filetype(path)
     if entry.type == "binary" then
@@ -380,6 +403,7 @@ function M.open()
   load_initial_diff()
 
   local function load_file_diff(use_mouse_pos)
+    if not (vim.api.nvim_buf_is_valid(panel_buf) and vim.api.nvim_buf_is_loaded(panel_buf)) then return end
     local row
     if use_mouse_pos then
       local mouse = vim.fn.getmousepos()
@@ -423,14 +447,26 @@ function M.open()
 
   vim.keymap.set("n", "<CR>", function() tree_open_node(false) end, { buffer = tree_buf, silent = true })
   vim.keymap.set("n", "<2-LeftMouse>", function() tree_open_node(true) end, { buffer = tree_buf, silent = true })
-  vim.keymap.set("n", "q", ":q<CR>", { buffer = panel_buf, silent = true })
-  vim.keymap.set("n", "q", ":q<CR>", { buffer = diff_buf, silent = true })
-  vim.keymap.set("n", "q", ":q<CR>", { buffer = tree_buf, silent = true })
+  vim.keymap.set("n", "q", function()
+    if vim.api.nvim_buf_is_valid(panel_buf) then vim.api.nvim_buf_delete(panel_buf, { force = true }) end
+    if vim.api.nvim_buf_is_valid(diff_buf) then vim.api.nvim_buf_delete(diff_buf, { force = true }) end
+    if vim.api.nvim_buf_is_valid(tree_buf) then vim.api.nvim_buf_delete(tree_buf, { force = true }) end
+  end, { buffer = panel_buf, silent = true })
+  vim.keymap.set("n", "q", function()
+    if vim.api.nvim_buf_is_valid(panel_buf) then vim.api.nvim_buf_delete(panel_buf, { force = true }) end
+    if vim.api.nvim_buf_is_valid(diff_buf) then vim.api.nvim_buf_delete(diff_buf, { force = true }) end
+    if vim.api.nvim_buf_is_valid(tree_buf) then vim.api.nvim_buf_delete(tree_buf, { force = true }) end
+  end, { buffer = diff_buf, silent = true })
+  vim.keymap.set("n", "q", function()
+    if vim.api.nvim_buf_is_valid(panel_buf) then vim.api.nvim_buf_delete(panel_buf, { force = true }) end
+    if vim.api.nvim_buf_is_valid(diff_buf) then vim.api.nvim_buf_delete(diff_buf, { force = true }) end
+    if vim.api.nvim_buf_is_valid(tree_buf) then vim.api.nvim_buf_delete(tree_buf, { force = true }) end
+  end, { buffer = tree_buf, silent = true })
 
   local watcher = uv.new_fs_event()
   watcher:start(vim.fn.getcwd(), { recursive = true }, vim.schedule_wrap(function(err)
     if err then return end
-    refresh()
+    if vim.api.nvim_buf_is_valid(panel_buf) then refresh() end
   end))
 
   local group = vim.api.nvim_create_augroup("GitDiffWatcher", { clear = true })
@@ -446,6 +482,14 @@ function M.open()
   add_unload_autocmd(panel_buf)
   add_unload_autocmd(diff_buf)
   add_unload_autocmd(tree_buf)
+
+  vim.api.nvim_create_autocmd({"BufWipeout","BufUnload"}, {
+    buffer = diff_buf,
+    callback = function()
+      row_to_info = {}
+      path_to_entry = {}
+    end,
+  })
 end
 
 return M
