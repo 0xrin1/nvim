@@ -174,6 +174,12 @@ function M.open()
     end
     local ft = vim.filetype.match({ filename = path })
     if ft == nil or ft == "diff" then
+      local ext = path:match("%.([%w]+)$")
+      if ext == "ts" then return "typescript" end
+      if ext == "tsx" then return "typescriptreact" end
+      if ext == "js" then return "javascript" end
+      if ext == "jsx" then return "javascriptreact" end
+      if ext == "lua" then return "lua" end
       return nil
     end
     return ft
@@ -203,7 +209,7 @@ function M.open()
       end
     end
 
-    return render_diff_buffer(diff_buf, diff_output, { filetype = resolve_filetype(initial_path) })
+    return render_diff_buffer(diff_buf, diff_output, { filetype = resolve_filetype(initial_path), path = initial_path })
   end
 
 
@@ -355,7 +361,7 @@ function M.open()
         diff_output = vim.fn.systemlist("git diff HEAD -- " .. vim.fn.shellescape(path))
       end
     end
-    render_diff_buffer(diff_buf, diff_output, { filetype = override_ft })
+    render_diff_buffer(diff_buf, diff_output, { filetype = override_ft, path = path })
   end
 
   local function load_initial_diff()
