@@ -133,10 +133,10 @@ function M.open()
 
   local base = vim.api.nvim_get_hl_by_name("Normal", true)
   local normal_bg = base.background and string.format("#%06x", base.background) or "#1e1e2e"
-  local normal_fg = base.foreground and string.format("#%06x", base.foreground) or palette.text
 
   local blended_green = blend_colors(palette.green, normal_bg, 0.08)
   local blended_red = blend_colors(palette.red, normal_bg, 0.10)
+  local diff_ctx_bg = blend_colors(palette.surface0, normal_bg, 0.06)
 
   vim.api.nvim_set_hl(0, "GitDiffAddBackdrop", {
     bg = blended_green,
@@ -147,7 +147,7 @@ function M.open()
     default = true,
   })
   vim.api.nvim_set_hl(0, "GitDiffContextBackdrop", {
-    bg = blend_colors(palette.surface0, normal_bg, 0.06),
+    bg = diff_ctx_bg,
     default = true,
   })
   vim.api.nvim_set_hl(0, "GitDiffAddText", { fg = palette.text, default = true })
