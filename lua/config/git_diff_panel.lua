@@ -43,7 +43,14 @@ local function render_diff_buffer(buf, diff_lines, opts)
   end
 
   for _, line in ipairs(diff_lines) do
-    if line:match("^diff %-%-git") or line:match("^index ") or line:match("^@@") or line:match("^[-+]{3}") then
+    -- Try to infer the path early from the "diff --git a/... b/..." header as well.
+    do
+      local a_path, b_path = line:match("^diff %-%-git a/(.-)%s+b/(.+)$")
+      if b_path and b_path ~= "" and b_path ~= "/dev/null" then
+        maybe_apply_file(b_path)
+      end
+    end
+    if line:match("^diff %-%-git") or line:match("^index ") or line:match("^@@") or line:match("^%-%-%-") or line:match("^%+%+%+") then
       table.insert(display_lines, line)
       line_meta[#display_lines] = "header"
       local path = line:match("^%+%+%+ b/(.+)$") or line:match("^%-%-%- a/(.+)$")
@@ -181,11 +188,22 @@ function M.open()
     local ft = vim.filetype.match({ filename = path })
     if ft == nil or ft == "diff" then
       local ext = path:match("%.([%w]+)$")
+      if ext == nil then return nil end
       if ext == "ts" then return "typescript" end
       if ext == "tsx" then return "typescriptreact" end
       if ext == "js" then return "javascript" end
       if ext == "jsx" then return "javascriptreact" end
       if ext == "lua" then return "lua" end
+      if ext == "py" then return "python" end
+      if ext == "rs" then return "rust" end
+      if ext == "go" then return "go" end
+      if ext == "rb" then return "ruby" end
+      if ext == "sh" or ext == "bash" then return "sh" end
+      if ext == "json" then return "json" end
+      if ext == "yml" or ext == "yaml" then return "yaml" end
+      if ext == "md" or ext == "markdown" then return "markdown" end
+      if ext == "css" then return "css" end
+      if ext == "scss" then return "scss" end
       return nil
     end
     return ft
@@ -304,8 +322,16 @@ function M.open()
       for _, line in ipairs(numstat) do
         local added, removed, file_str = line:match("([-%d]+)\t([-%d]+)\t(.-)$")
         if added and file_str then
-          local old_path, new_path = file_str:match("^{(.*) => (.*)}$")
-          local is_rename = old_path ~= nil
+          -- Handle rename paths produced by git with brace expansion, e.g.:
+          --   "dir/{old => new}/file.ext" or "{old => new}"
+          -- Reconstruct both old and new paths when present; otherwise use file_str directly.
+          local pre, old_mid, new_mid, post = file_str:match("^(.-){(.-) %=> (.-)}(.-)$")
+          local is_rename = pre ~= nil
+          local old_path, new_path
+          if is_rename then
+            old_path = (pre or "") .. (old_mid or "") .. (post or "")
+            new_path = (pre or "") .. (new_mid or "") .. (post or "")
+          end
           local file_path = is_rename and new_path or file_str
           local display = is_rename and (old_path .. " => " .. new_path) or nil
           local parts = split_path(file_path)
