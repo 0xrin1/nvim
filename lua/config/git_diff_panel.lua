@@ -3,6 +3,101 @@ local M = {}
 local highlight_ns = vim.api.nvim_create_namespace("GitDiffPanelHighlights")
 local virt_ns = vim.api.nvim_create_namespace("GitDiffPanelVirtText")
 
+-- Multi-repo settings (scoped to current working directory)
+-- You can override via, e.g.: vim.g.git_multi_repo_max_depth = 3
+local MAX_SCAN_DEPTH = vim.g.git_multi_repo_max_depth or 3
+local REPO_RESCAN_INTERVAL_MS = vim.g.git_multi_repo_scan_interval_ms or 10000
+local IGNORE_DIRS = {
+  [".git"] = true,
+  ["node_modules"] = true,
+  [".venv"] = true,
+  ["venv"] = true,
+  [".direnv"] = true,
+  [".next"] = true,
+  [".cache"] = true,
+  ["dist"] = true,
+  ["build"] = true,
+  ["target"] = true,
+  ["out"] = true,
+  [".turbo"] = true,
+  [".yarn"] = true,
+  [".pnpm-store"] = true,
+  ["__pycache__"] = true,
+}
+
+local uv = vim.loop
+
+local function path_join(a, b)
+  if not a or a == "" then return b end
+  if not b or b == "" then return a end
+  if a:sub(-1) == "/" then return a .. b end
+  return a .. "/" .. b
+end
+
+local function is_dir(path)
+  local st = uv.fs_stat(path)
+  return st and st.type == "directory" or false
+end
+
+local function is_file(path)
+  local st = uv.fs_stat(path)
+  return st and st.type == "file" or false
+end
+
+local function is_git_repo(dir)
+  local dotgit = path_join(dir, ".git")
+  return is_dir(dotgit) or is_file(dotgit)
+end
+
+local function split_path_components(path)
+  local parts = {}
+  for part in path:gmatch("[^/]+") do table.insert(parts, part) end
+  return parts
+end
+
+local function rel_to(from, target)
+  -- Return path of target relative to from. If not prefix, return target.
+  local norm_from = from:gsub("/+", "/")
+  local norm_t = target:gsub("/+", "/")
+  if norm_t:sub(1, #norm_from) == norm_from then
+    local rest = norm_t:sub(#norm_from + 1)
+    if rest:sub(1, 1) == "/" then rest = rest:sub(2) end
+    return rest ~= "" and rest or "."
+  end
+  return target
+end
+
+-- Discover all git repositories under root up to a max depth
+local function discover_repos(root, max_depth)
+  local repos = {}
+  local seen = {}
+  local function scan(dir, depth)
+    if depth > max_depth then return end
+    if seen[dir] then return end
+    seen[dir] = true
+
+    if is_git_repo(dir) then
+      table.insert(repos, dir)
+      return -- do not traverse inside repos further by default
+    end
+
+    local req = uv.fs_scandir(dir)
+    if not req then return end
+    while true do
+      local name, typ = uv.fs_scandir_next(req)
+      if not name then break end
+      if typ == "directory" then
+        if not IGNORE_DIRS[name] then
+          scan(path_join(dir, name), depth + 1)
+        end
+      end
+    end
+  end
+  scan(root, 0)
+  -- If root itself is not a repo and no children repos found, fall back to root if it is a repo
+  return repos
+end
+
 local function hex_to_rgb(color)
   color = color:gsub("#", "")
   if #color ~= 6 then
@@ -159,6 +254,7 @@ function M.open()
   vim.api.nvim_set_hl(0, "GitDiffAddText", { fg = palette.text, default = true })
   vim.api.nvim_set_hl(0, "GitDiffDeleteText", { fg = palette.text, default = true })
   vim.api.nvim_set_hl(0, "GitDiffContextText", { fg = palette.overlay2, default = true })
+  vim.api.nvim_set_hl(0, "GitRepoHeader", { fg = palette.yellow, bold = true, default = true })
   vim.api.nvim_set_hl(0, "DiffDelete", { fg = palette.red, bg = "NONE", default = true })
   vim.api.nvim_set_hl(0, "diffAdded", { link = "Normal", default = true })
   vim.api.nvim_set_hl(0, "diffRemoved", { link = "DiffDelete", default = true })
@@ -209,30 +305,9 @@ function M.open()
     return ft
   end
 
-  local function update_diff(initial_path)
-    local diff_output = vim.fn.systemlist("git diff HEAD -M")
-    local untracked = vim.fn.systemlist("git ls-files --others --exclude-standard")
-
-    for _, untracked_file in ipairs(untracked) do
-      if untracked_file ~= "" then
-        local file_type = vim.fn.system("file -b " .. vim.fn.shellescape(untracked_file)):gsub("\n", "")
-        table.insert(diff_output, "diff --git a/" .. untracked_file .. " b/" .. untracked_file)
-        table.insert(diff_output, "new file mode 100644")
-        if file_type:find("text") then
-          local file_lines = vim.fn.systemlist("cat " .. vim.fn.shellescape(untracked_file))
-          table.insert(diff_output, "--- /dev/null")
-          table.insert(diff_output, "+++ b/" .. untracked_file)
-          table.insert(diff_output, "@@ -0,0 +1," .. #file_lines .. " @@")
-          for _, fline in ipairs(file_lines) do
-            table.insert(diff_output, "+" .. fline)
-          end
-        else
-          table.insert(diff_output, "Binary files /dev/null and b/" .. untracked_file .. " differ")
-        end
-      end
-    end
-
-    return render_diff_buffer(diff_buf, diff_output, { filetype = resolve_filetype(initial_path), path = initial_path })
+  -- Legacy single-repo summary is superseded by multi-repo aggregation.
+  local function update_diff(_initial_path)
+    return render_diff_buffer(diff_buf, {}, {})
   end
 
   local function pick_latest_path()
@@ -250,8 +325,25 @@ function M.open()
   local path_to_entry = {}
   local resolved_path = nil
 
-  local uv = vim.loop
   local last_refresh = 0
+  local last_repo_scan = 0
+  local cached_repos = nil
+
+  local function git_systemlist(repo_root, subcmd)
+    local cmd = string.format("git -C %s %s", vim.fn.shellescape(repo_root), subcmd)
+    return vim.fn.systemlist(cmd)
+  end
+
+  local project_root = vim.fn.getcwd()
+
+  local function ensure_repos(force)
+    local now = uv.now()
+    if force or not cached_repos or now - last_repo_scan > REPO_RESCAN_INTERVAL_MS then
+      cached_repos = discover_repos(project_root, MAX_SCAN_DEPTH)
+      last_repo_scan = now
+    end
+    return cached_repos or {}
+  end
 
   local last_selected_mtime = 0
   local function get_mtime(path)
@@ -297,44 +389,75 @@ function M.open()
     last_refresh = now
 
     if not (vim.api.nvim_buf_is_valid(panel_buf) and vim.api.nvim_buf_is_loaded(panel_buf)) then return end
-    local tree = {}
-      local function split_path(path)
-        local parts = {}
-        for part in path:gmatch("[^/]+") do
-          table.insert(parts, part)
-        end
-        return parts
-      end
-      local function insert_into_tree(current, parts, entry)
-        if #parts == 0 then return end
-        if #parts == 1 then
-          current[parts[1]] = entry
-        else
-          local dir = parts[1]
-          if not current[dir] then
-            current[dir] = { type = "dir", children = {} }
-          end
-          insert_into_tree(current[dir].children, { unpack(parts, 2) }, entry)
-        end
-      end
+    local lines = {}
+    row_to_info = {}
+    path_to_entry = {}
 
-      local numstat = vim.fn.systemlist("git diff HEAD --numstat -M")
+    local function insert_into_tree(current, parts, entry)
+      if #parts == 0 then return end
+      if #parts == 1 then
+        current[parts[1]] = entry
+      else
+        local dir = parts[1]
+        if not current[dir] then
+          current[dir] = { type = "dir", children = {} }
+        end
+        insert_into_tree(current[dir].children, { unpack(parts, 2) }, entry)
+      end
+    end
+
+    local function build_lines(node, indent, repo_prefix, repo_rel_path)
+      local keys = {}
+      for k in pairs(node) do table.insert(keys, k) end
+      table.sort(keys)
+      for _, key in ipairs(keys) do
+        local child = node[key]
+        if child.type == "dir" then
+          table.insert(lines, indent .. key .. "/")
+          local new_rel = repo_rel_path .. (repo_rel_path == "" and "" or "/") .. key
+          build_lines(child.children, indent .. "  ", repo_prefix, new_rel)
+        else
+          local display_name = child.display or key
+          local line
+          local in_repo_rel = repo_rel_path .. (repo_rel_path == "" and "" or "/") .. key
+          local full_project_rel = repo_prefix ~= "" and path_join(repo_prefix, in_repo_rel) or in_repo_rel
+          if child.type == "binary" then
+            line = indent .. display_name .. " (binary)"
+          else
+            line = indent .. display_name .. " +" .. child.added .. " -" .. child.removed
+          end
+          table.insert(lines, line)
+          row_to_info[#lines] = { path = full_project_rel, entry = child }
+          path_to_entry[full_project_rel] = child
+        end
+      end
+    end
+
+    local repos = ensure_repos(false)
+    table.sort(repos)
+    local header_rows = {}
+
+    for _, repo_root in ipairs(repos) do
+      local repo_rel = rel_to(project_root, repo_root)
+      if repo_rel == "." then repo_rel = "" end
+
+      local repo_tree = {}
+
+      -- Modified files
+      local numstat = git_systemlist(repo_root, "diff HEAD --numstat -M")
       for _, line in ipairs(numstat) do
         local added, removed, file_str = line:match("([-%d]+)\t([-%d]+)\t(.-)$")
         if added and file_str then
-          -- Handle rename paths produced by git with brace expansion, e.g.:
-          --   "dir/{old => new}/file.ext" or "{old => new}"
-          -- Reconstruct both old and new paths when present; otherwise use file_str directly.
           local pre, old_mid, new_mid, post = file_str:match("^(.-){(.-) %=> (.-)}(.-)$")
           local is_rename = pre ~= nil
-          local old_path, new_path
+          local old_rel, new_rel
           if is_rename then
-            old_path = (pre or "") .. (old_mid or "") .. (post or "")
-            new_path = (pre or "") .. (new_mid or "") .. (post or "")
+            old_rel = (pre or "") .. (old_mid or "") .. (post or "")
+            new_rel = (pre or "") .. (new_mid or "") .. (post or "")
           end
-          local file_path = is_rename and new_path or file_str
-          local display = is_rename and (old_path .. " => " .. new_path) or nil
-          local parts = split_path(file_path)
+          local repo_rel_file = is_rename and new_rel or file_str
+          local display = is_rename and (old_rel .. " => " .. new_rel) or nil
+
           local entry
           if added == "-" then
             entry = { type = "binary", is_untracked = false }
@@ -342,60 +465,53 @@ function M.open()
             entry = { type = "file", added = tonumber(added), removed = tonumber(removed), is_untracked = false }
           end
           entry.display = display
-          insert_into_tree(tree, parts, entry)
+          entry.repo_root = repo_root
+          entry.repo_relpath = repo_rel_file
+          entry.abs_path = path_join(repo_root, repo_rel_file)
+
+          insert_into_tree(repo_tree, split_path_components(repo_rel_file), entry)
         end
       end
 
-      local untracked = vim.fn.systemlist("git ls-files --others --exclude-standard")
-      for _, untracked_file in ipairs(untracked) do
-        if untracked_file ~= "" then
-          local parts = split_path(untracked_file)
-          local file_type = vim.fn.system("file -b " .. vim.fn.shellescape(untracked_file)):gsub("\n", "")
+      -- Untracked files
+      local untracked = git_systemlist(repo_root, "ls-files --others --exclude-standard")
+      for _, f in ipairs(untracked) do
+        if f ~= "" then
+          local abs_path = path_join(repo_root, f)
+          local file_type = vim.fn.system("file -b " .. vim.fn.shellescape(abs_path)):gsub("\n", "")
           local entry
           if file_type:find("text") then
-            local file_lines = vim.fn.systemlist("cat " .. vim.fn.shellescape(untracked_file))
-            local added = #file_lines
-            entry = { type = "file", added = added, removed = 0, is_untracked = true }
+            local file_lines = vim.fn.systemlist("cat " .. vim.fn.shellescape(abs_path))
+            entry = { type = "file", added = #file_lines, removed = 0, is_untracked = true }
           else
             entry = { type = "binary", is_untracked = true }
           end
-          insert_into_tree(tree, parts, entry)
+          entry.repo_root = repo_root
+          entry.repo_relpath = f
+          entry.abs_path = abs_path
+
+          insert_into_tree(repo_tree, split_path_components(f), entry)
         end
       end
 
-      local lines = {}
-      row_to_info = {}
-      path_to_entry = {}
-      local function build_lines(node, indent, current_path)
-        local keys = {}
-        for k in pairs(node) do table.insert(keys, k) end
-        table.sort(keys)
-        for _, key in ipairs(keys) do
-          local child = node[key]
-          if child.type == "dir" then
-            table.insert(lines, indent .. key .. "/")
-            local new_path = current_path .. (current_path == "" and "" or "/") .. key
-            build_lines(child.children, indent .. "  ", new_path)
-          else
-            local display_name = child.display or key
-            local line
-            local full_path = current_path .. (current_path == "" and "" or "/") .. key
-            if child.type == "binary" then
-              line = indent .. display_name .. " (binary)"
-            else
-              line = indent .. display_name .. " +" .. child.added .. " -" .. child.removed
-            end
-            table.insert(lines, line)
-            row_to_info[#lines] = { path = full_path, entry = child }
-            path_to_entry[full_path] = child
-          end
-        end
+      -- Only render header and tree if there are entries
+      if next(repo_tree) ~= nil then
+        local header_label = (repo_rel ~= "" and repo_rel or ".")
+        table.insert(lines, "repo: " .. header_label)
+        table.insert(header_rows, #lines)
+        build_lines(repo_tree, "  ", repo_rel, "")
+        table.insert(lines, "") -- spacer
       end
-      build_lines(tree, "", "")
-
-      if not vim.api.nvim_buf_is_valid(panel_buf) then return end
-      vim.api.nvim_buf_set_lines(panel_buf, 0, -1, false, lines)
     end
+
+    if not vim.api.nvim_buf_is_valid(panel_buf) then return end
+    vim.api.nvim_buf_set_lines(panel_buf, 0, -1, false, lines)
+
+    -- Highlight repo headers
+    for _, row in ipairs(header_rows) do
+      vim.api.nvim_buf_add_highlight(panel_buf, highlight_ns, "GitRepoHeader", row - 1, 0, -1)
+    end
+  end
 
   refresh()
 
@@ -427,17 +543,17 @@ function M.open()
       table.insert(diff_output, "Binary file differs")
     else
       if entry.is_untracked then
-        local file_lines = vim.fn.systemlist("cat " .. vim.fn.shellescape(path))
-        table.insert(diff_output, "diff --git a/" .. path .. " b/" .. path)
+        local file_lines = vim.fn.systemlist("cat " .. vim.fn.shellescape(entry.abs_path))
+        table.insert(diff_output, "diff --git a/" .. entry.repo_relpath .. " b/" .. entry.repo_relpath)
         table.insert(diff_output, "new file mode 100644")
         table.insert(diff_output, "--- /dev/null")
-        table.insert(diff_output, "+++ b/" .. path)
+        table.insert(diff_output, "+++ b/" .. entry.repo_relpath)
         table.insert(diff_output, "@@ -0,0 +1," .. #file_lines .. " @@")
         for _, fline in ipairs(file_lines) do
           table.insert(diff_output, "+" .. fline)
         end
       else
-        diff_output = vim.fn.systemlist("git diff HEAD -- " .. vim.fn.shellescape(path))
+        diff_output = git_systemlist(entry.repo_root, "diff HEAD -- " .. vim.fn.shellescape(entry.repo_relpath))
       end
     end
     render_diff_buffer(diff_buf, diff_output, { filetype = override_ft, path = path })
@@ -450,7 +566,15 @@ function M.open()
       focus_row_for_path(target_path)
       last_selected_mtime = mt or 0
     else
-      local first = row_to_info[1]
+      -- Find the first selectable row (skip headers/spacers)
+      local first
+      for i = 1, vim.api.nvim_buf_line_count(panel_buf) do
+        local info = row_to_info[i]
+        if info and info.entry then
+          first = info
+          break
+        end
+      end
       if first then
         load_diff_for_path(first.path, first.entry)
         focus_row_for_path(first.path)
@@ -531,6 +655,7 @@ function M.open()
   watcher:start(vim.fn.getcwd(), { recursive = true }, vim.schedule_wrap(function(err, fname, status)
     if err then return end
     if vim.api.nvim_buf_is_valid(panel_buf) then
+      ensure_repos(false)
       refresh()
       local p, mt = pick_latest_changed_with_mtime()
       if p and path_to_entry[p] then
