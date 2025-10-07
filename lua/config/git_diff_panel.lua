@@ -233,9 +233,15 @@ function M.open()
   local tree_buf = vim.api.nvim_get_current_buf()
 
   vim.cmd("wincmd k")
-  vim.cmd("resize 15")
-
   local panel_buf = vim.api.nvim_get_current_buf()
+  local panel_win = vim.fn.bufwinid(panel_buf)
+  local tree_win = vim.fn.bufwinid(tree_buf)
+  if panel_win ~= -1 and tree_win ~= -1 then
+    local col_h = vim.api.nvim_win_get_height(panel_win) + vim.api.nvim_win_get_height(tree_win)
+    local tree_h = math.max(1, math.floor(col_h * 0.30))
+    local panel_h = math.max(1, col_h - tree_h)
+    vim.api.nvim_win_set_height(panel_win, panel_h)
+  end
   vim.opt_local.buftype = "nofile"
   vim.opt_local.bufhidden = "hide"
   vim.opt_local.swapfile = false
