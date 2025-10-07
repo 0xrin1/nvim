@@ -123,6 +123,7 @@ local function render_diff_buffer(buf, diff_lines, opts)
   opts = opts or {}
   local display_lines = {}
   local line_meta = {}
+  local line_to_file_line = {}
   local filetype = opts.filetype
   local current_path = opts.path
 
@@ -137,15 +138,24 @@ local function render_diff_buffer(buf, diff_lines, opts)
     end
   end
 
+  local current_new_line = 0
   for _, line in ipairs(diff_lines) do
-    -- Try to infer the path early from the "diff --git a/... b/..." header as well.
     do
       local a_path, b_path = line:match("^diff %-%-git a/(.-)%s+b/(.+)$")
       if b_path and b_path ~= "" and b_path ~= "/dev/null" then
         maybe_apply_file(b_path)
       end
     end
-    if line:match("^diff %-%-git") or line:match("^index ") or line:match("^@@") or line:match("^%-%-%-") or line:match("^%+%+%+") then
+    if line:match("^@@") then
+      local new_start = line:match("^@@ %-%d+,%d+ %+(%d+)")
+      if new_start then
+        current_new_line = tonumber(new_start)
+      end
+      table.insert(display_lines, line)
+      line_meta[#display_lines] = "header"
+      local path = line:match("^%+%+%+ b/(.+)$") or line:match("^%-%-%- a/(.+)$")
+      maybe_apply_file(path)
+    elseif line:match("^diff %-%-git") or line:match("^index ") or line:match("^%-%-%-") or line:match("^%+%+%+") then
       table.insert(display_lines, line)
       line_meta[#display_lines] = "header"
       local path = line:match("^%+%+%+ b/(.+)$") or line:match("^%-%-%- a/(.+)$")
@@ -153,12 +163,16 @@ local function render_diff_buffer(buf, diff_lines, opts)
     elseif vim.startswith(line, "+") and not vim.startswith(line, "+++") then
       table.insert(display_lines, line:sub(2))
       line_meta[#display_lines] = "add"
+      line_to_file_line[#display_lines] = current_new_line
+      current_new_line = current_new_line + 1
     elseif vim.startswith(line, "-") and not vim.startswith(line, "---") then
       table.insert(display_lines, line:sub(2))
       line_meta[#display_lines] = "remove"
     elseif vim.startswith(line, " ") then
       table.insert(display_lines, line:sub(2))
       line_meta[#display_lines] = "context"
+      line_to_file_line[#display_lines] = current_new_line
+      current_new_line = current_new_line + 1
     else
       table.insert(display_lines, line)
       line_meta[#display_lines] = "header"
@@ -204,7 +218,7 @@ local function render_diff_buffer(buf, diff_lines, opts)
     vim.api.nvim_set_option_value("filetype", "diff", { buf = buf })
   end
 
-  return filetype, current_path
+  return filetype, current_path, line_to_file_line
 end
 
 function M.open()
@@ -226,6 +240,10 @@ function M.open()
   vim.opt_local.number = false
   vim.opt_local.relativenumber = false
   vim.opt_local.cursorline = true
+  vim.opt_local.wrap = false
+  vim.opt_local.linebreak = false
+  vim.opt_local.breakindent = false
+  vim.opt_local.showbreak = ""
   vim.bo[panel_buf].filetype = "gitfiles"
 
   local palette = require("catppuccin.palettes").get_palette("mocha")
@@ -275,6 +293,9 @@ function M.open()
   vim.opt_local.bufhidden = "hide"
   vim.opt_local.swapfile = false
   vim.opt_local.wrap = false
+  vim.opt_local.linebreak = false
+  vim.opt_local.breakindent = false
+  vim.opt_local.showbreak = ""
   vim.opt_local.signcolumn = "no"
 
   local function resolve_filetype(path)
@@ -324,6 +345,7 @@ function M.open()
   local row_to_info = {}
   local path_to_entry = {}
   local resolved_path = nil
+  local current_line_mapping = {}
 
   local last_refresh = 0
   local last_repo_scan = 0
@@ -556,7 +578,8 @@ function M.open()
         diff_output = git_systemlist(entry.repo_root, "diff HEAD -- " .. vim.fn.shellescape(entry.repo_relpath))
       end
     end
-    render_diff_buffer(diff_buf, diff_output, { filetype = override_ft, path = path })
+    local _, _, line_mapping = render_diff_buffer(diff_buf, diff_output, { filetype = override_ft, path = path })
+    current_line_mapping = line_mapping or {}
   end
 
   local function load_initial_diff()
@@ -645,6 +668,20 @@ function M.open()
     if vim.api.nvim_buf_is_valid(diff_buf) then vim.api.nvim_buf_delete(diff_buf, { force = true }) end
     if vim.api.nvim_buf_is_valid(tree_buf) then vim.api.nvim_buf_delete(tree_buf, { force = true }) end
   end, { buffer = diff_buf, silent = true })
+  vim.keymap.set("n", "go", function()
+    if resolved_path then
+      local cursor_line = vim.fn.line(".")
+      local file_line = current_line_mapping[cursor_line]
+      local info = row_to_info[vim.fn.line(".")]
+      local abs_path = info and info.entry and info.entry.abs_path or path_join(project_root, resolved_path)
+      if abs_path and is_file(abs_path) then
+        vim.cmd("edit " .. vim.fn.fnameescape(abs_path))
+        if file_line then
+          vim.api.nvim_win_set_cursor(0, { file_line, 0 })
+        end
+      end
+    end
+  end, { buffer = diff_buf, silent = true })
   vim.keymap.set("n", "q", function()
     if vim.api.nvim_buf_is_valid(panel_buf) then vim.api.nvim_buf_delete(panel_buf, { force = true }) end
     if vim.api.nvim_buf_is_valid(diff_buf) then vim.api.nvim_buf_delete(diff_buf, { force = true }) end
@@ -657,19 +694,21 @@ function M.open()
     if vim.api.nvim_buf_is_valid(panel_buf) then
       ensure_repos(false)
       refresh()
-      local p, mt = pick_latest_changed_with_mtime()
-      if p and path_to_entry[p] then
-        if mt > last_selected_mtime or p ~= resolved_path then
-          load_diff_for_path(p, path_to_entry[p])
-          focus_row_for_path(p)
-          last_selected_mtime = mt
-        end
-      else
-        -- Repo became clean: show "(no changes)" in diff view
-        if vim.api.nvim_buf_is_valid(diff_buf) then
-          render_diff_buffer(diff_buf, {}, {})
-          resolved_path = nil
-          last_selected_mtime = 0
+      local current_buf = vim.api.nvim_get_current_buf()
+      if current_buf == diff_buf then
+        local p, mt = pick_latest_changed_with_mtime()
+        if p and path_to_entry[p] then
+          if mt > last_selected_mtime or p ~= resolved_path then
+            load_diff_for_path(p, path_to_entry[p])
+            focus_row_for_path(p)
+            last_selected_mtime = mt
+          end
+        else
+          if vim.api.nvim_buf_is_valid(diff_buf) then
+            render_diff_buffer(diff_buf, {}, {})
+            resolved_path = nil
+            last_selected_mtime = 0
+          end
         end
       end
     end
