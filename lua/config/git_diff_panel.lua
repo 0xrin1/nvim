@@ -76,9 +76,12 @@ local function discover_repos(root, max_depth)
     if seen[dir] then return end
     seen[dir] = true
 
-    if is_git_repo(dir) then
+    local is_repo = is_git_repo(dir)
+    if is_repo then
       table.insert(repos, dir)
-      return -- do not traverse inside repos further by default
+      if depth > 0 then
+        return
+      end
     end
 
     local req = uv.fs_scandir(dir)
@@ -94,7 +97,6 @@ local function discover_repos(root, max_depth)
     end
   end
   scan(root, 0)
-  -- If root itself is not a repo and no children repos found, fall back to root if it is a repo
   return repos
 end
 
@@ -340,7 +342,21 @@ function M.open()
     vim.api.nvim_set_option_value("winhighlight", "CursorLine:CursorLine", { scope = "local", win = diff_win })
   end
 
-  
+  local function safe_win_set_cursor(winid, line, col)
+    if not (winid and vim.api.nvim_win_is_valid(winid)) then return end
+    local buf = vim.api.nvim_win_get_buf(winid)
+    if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
+    local maxline = vim.api.nvim_buf_line_count(buf)
+    if maxline < 1 then return end
+    if not line or line < 1 then line = 1 end
+    if line > maxline then line = maxline end
+    local l = vim.api.nvim_buf_get_lines(buf, line - 1, line, false)[1] or ""
+    local maxcol = #l
+    col = col or 0
+    if col < 0 then col = 0 end
+    if col > maxcol then col = maxcol end
+    vim.api.nvim_win_set_cursor(winid, { line, col })
+  end
 
   local row_to_info = {}
   local path_to_entry = {}
@@ -620,7 +636,7 @@ function M.open()
       local mouse = vim.fn.getmousepos()
       if vim.api.nvim_win_get_buf(mouse.winid) == panel_buf then
         vim.api.nvim_set_current_win(mouse.winid)
-        vim.api.nvim_win_set_cursor(mouse.winid, { mouse.line, mouse.column - 1 })
+        safe_win_set_cursor(mouse.winid, mouse.line, mouse.column - 1)
       end
       row = mouse.line
     else
@@ -642,7 +658,7 @@ function M.open()
       local mouse = vim.fn.getmousepos()
       if vim.api.nvim_win_get_buf(mouse.winid) == tree_buf then
         vim.api.nvim_set_current_win(mouse.winid)
-        vim.api.nvim_win_set_cursor(mouse.winid, { mouse.line, mouse.column - 1 })
+        safe_win_set_cursor(mouse.winid, mouse.line, mouse.column - 1)
       end
     end
     local node = api.tree.get_node_under_cursor()
