@@ -366,6 +366,7 @@ function M.open()
 
   local row_to_info = {}
   local path_to_entry = {}
+  local collapsed_repos = {}
   local resolved_path = nil
   local current_line_mapping = {}
 
@@ -541,10 +542,15 @@ function M.open()
       -- Only render header and tree if there are entries
       if next(repo_tree) ~= nil then
         local header_label = (repo_rel ~= "" and repo_rel or ".")
-        table.insert(lines, "repo: " .. header_label)
+        local is_collapsed = collapsed_repos[repo_root] == true
+        local header_text = "repo: " .. header_label .. (is_collapsed and " (collapsed)" or "")
+        table.insert(lines, header_text)
         table.insert(header_rows, #lines)
-        build_lines(repo_tree, "  ", repo_rel, "")
-        table.insert(lines, "") -- spacer
+        row_to_info[#lines] = { kind = "repo_header", repo_key = repo_root }
+        if not is_collapsed then
+          build_lines(repo_tree, "  ", repo_rel, "")
+        end
+        table.insert(lines, "")
       end
     end
 
@@ -657,7 +663,19 @@ function M.open()
 
   vim.keymap.set("n", "<CR>", function() load_file_diff(false) end, { buffer = panel_buf, silent = true })
   vim.keymap.set("n", "<LeftMouse>", function() load_file_diff(true) end, { buffer = panel_buf, silent = true })
-  vim.keymap.set("n", "<2-LeftMouse>", function() load_file_diff(true) end, { buffer = panel_buf, silent = true })
+  vim.keymap.set("n", "<2-LeftMouse>", function()
+    local mouse = vim.fn.getmousepos()
+    if vim.api.nvim_win_get_buf(mouse.winid) == panel_buf then
+      local line = mouse.line
+      local info = row_to_info[line]
+      if info and info.kind == "repo_header" and info.repo_key then
+        collapsed_repos[info.repo_key] = not collapsed_repos[info.repo_key]
+        refresh()
+        return
+      end
+    end
+    load_file_diff(true)
+  end, { buffer = panel_buf, silent = true })
 
   local function tree_open_node(use_mouse)
     if use_mouse then
