@@ -1,52 +1,51 @@
-# Diff‑First Neovim (Multi‑Repo Git Panel)
+# Neovim Git Diff Panel — Diff‑First, Multi‑Repo Neovim Config
 
-A fast, opinionated Neovim setup that puts Git diffs front and center. Open to a live, unified diff panel with a file tree below, auto‑refresh on save, multi‑repo aware, and one‑keystroke navigation into the exact line in the real file. Batteries included: Telescope, Nvim‑Tree, Gitsigns, Diffview, Fugitive, LSP (via Mason), CMP + Copilot, Toggleterm, Catppuccin.
+A fast, opinionated Neovim configuration that opens to a live unified Git diff panel with a project tree. Designed for code review, staging, and multi‑repo workflows. Includes Telescope, Nvim‑Tree, Gitsigns, Diffview, Fugitive, LSP (Mason + nvim‑lspconfig), nvim‑cmp + Copilot, Toggleterm, and Catppuccin.
 
 > Demo: add a short GIF at docs/demo.gif for best results on GitHub
 
-## Features
-- Diff‑first startup: unified diff panel + project tree
+## Why this Neovim config for Git?
+- Diff‑first startup: unified Git diff + project tree
 - Multi‑repo aware (recursively scans nested repos)
-- Live auto‑refresh on file changes
-- Inline +/− markers and soft diff backgrounds
-- Jump from diff to exact file+line
-- One key to open panel: <leader>gd; full Diffview: <leader>gD
-- Rich Git UX: Gitsigns hunks, Fugitive, Diffview history/merges
+- Live auto‑refresh on save and file changes
+- One‑keystroke jump from diff to the exact file/line
+- Rich Git UX: Gitsigns hunks, Fugitive commands, Diffview history/merges
 - Productive defaults: Telescope, Nvim‑Tree, Toggleterm
 - LSP in minutes: Mason + LSPConfig + nvim‑cmp (+ Copilot)
 - Beautiful out of the box (Catppuccin Mocha), CUDA/PTX syntax
 
-## Quick start
+## Quick start (Install)
 Prereqs: Neovim ≥ 0.9, git, ripgrep (for Telescope live_grep)
 
 Option A
-1) Back up your current config: mv ~/.config/nvim ~/.config/nvim.bak
-2) Copy this folder to ~/.config/nvim
-3) Launch: nvim (lazy.nvim bootstraps automatically)
+1) Back up your current config: `mv ~/.config/nvim ~/.config/nvim.bak`
+2) Copy this folder to `~/.config/nvim`
+3) Launch: `nvim` (lazy.nvim bootstraps automatically)
 
 Option B
-1) Clone this repo into ~/.config/nvim
-2) Launch: nvim
+1) Clone this repo into `~/.config/nvim`
+2) Launch: `nvim`
 
-Tip: :Keys shows keybindings at any time
+Tips
+- First run installs plugins automatically; if not, run `:Lazy`
+- `:Keys` shows keybindings at any time
+
+## Usage
+- Startup: with no file args, the diff panel opens by default
+- Anytime: `<leader>gd` opens panel; `<leader>gD` opens Diffview
+- Inside panel: `Enter` or double‑click previews a file’s diff, `go` opens the file at the mapped line, `q` closes
+- Multi‑repo: panel aggregates changes from nested repos under your cwd
 
 ## Keybindings
-- Files/search: <C-p> find files, <leader>fg live grep, <leader>e file tree
-- Git panel: <leader>gd open, Enter/double‑click to preview a file’s diff, q to close, go to open file at cursor line
-- Diffview: <leader>gD open
-- Gitsigns: <leader>gp preview hunk, <leader>gu reset hunk, <leader>gU reset buffer, <leader>gn next hunk, <leader>gN prev hunk
-- LSP: gD declaration, gd definition, K hover, gi implementation, <C-k> signature, <leader>wa/wr/wl workspace, <leader>D type, <leader>rn rename, <leader>ca code action, gr references, <leader>f format
-- Terminal: <C-\> toggle floating terminal
-
-## Why diff‑first?
-- Highlights intent: see removals and additions in one frame
-- Preserves context: adjacent lines travel with the hunk
-- Faster iteration: precise hunks enable targeted reviews
-- Better validation: shared diffs make review and rollback easier
-- Scales collaboration: one diff artifact keeps everyone in sync
+- Files/search: `<C-p>` find files, `<leader>fg` live grep, `<leader>e` file tree
+- Git panel: `<leader>gd` open, `Enter`/double‑click to preview a file’s diff, `q` close, `go` open file at cursor line
+- Diffview: `<leader>gD` open
+- Gitsigns: `<leader>gp` preview hunk, `<leader>gu` reset hunk, `<leader>gU` reset buffer, `<leader>gn` next hunk, `<leader>gN` prev hunk
+- LSP: `gD` declaration, `gd` definition, `K` hover, `gi` implementation, `<C-k>` signature, `<leader>wa/wr/wl` workspace, `<leader>D` type, `<leader>rn` rename, `<leader>ca` code action, `gr` references, `<leader>f` format
+- Terminal: `<C-\>` toggle floating terminal
 
 ## Layout (ASCII)
-This is the default layout when opening the unified diff panel (<leader>gd):
+Default layout when opening the unified diff panel (`<leader>gd`):
 
 ```
 +---------------------------+------------------------------------------------------+
@@ -69,20 +68,14 @@ This is the default layout when opening the unified diff panel (<leader>gd):
 Notes
 - Left: top shows changed files (+added/−removed), bottom shows project tree
 - Right: unified diff with add/remove/context highlighting
-- Keys: <leader>gd open, Enter to load diff, q close
-
-## Usage
-- Startup: with no file args, the diff panel opens by default
-- Anytime: <leader>gd opens panel; <leader>gD opens Diffview
-- Inside panel: Enter or double‑click previews a file’s diff, go opens the file at the mapped line, q closes
-- Multi‑repo: panel aggregates changes from nested repos under your cwd
+- Keys: `<leader>gd` open, `Enter` to load diff, `q` close
 
 ## Customize
-- Scan depth: set vim.g.git_multi_repo_max_depth (default 3)
-- Rescan interval (ms): set vim.g.git_multi_repo_scan_interval_ms (default 10000)
-- Theme: uses Catppuccin Mocha palette
+- Scan depth: set `vim.g.git_multi_repo_max_depth` (default 3)
+- Rescan interval (ms): set `vim.g.git_multi_repo_scan_interval_ms` (default 10000)
+- Theme: Catppuccin Mocha palette
 - Disable auto‑open on start: remove the VimEnter autocmd in lua/config/autocmds.lua:45‑51
-- Commands: :Keys, :GitDiff
+- Commands: `:Keys`, `:GitDiff`
 
 ## Plugin stack
 - Core: [folke/lazy.nvim](https://github.com/folke/lazy.nvim)
@@ -97,12 +90,17 @@ Notes
 - Open diff panel mapping: lua/plugins/fugitive.lua:6
 - Diffview mapping: lua/plugins/diffview.lua:86
 - Panel keys: Enter/Double‑Click to preview, go to open, q to close (lua/config/git_diff_panel.lua:658‑711)
-- :Keys/:GitDiff commands and auto‑open: lua/config/autocmds.lua:37‑51
+- `:Keys`/`:GitDiff` commands and auto‑open: lua/config/autocmds.lua:37‑51
 
 ## Troubleshooting
-- Telescope live_grep requires ripgrep (rg) in PATH
+- Telescope `live_grep` requires ripgrep (`rg`) in PATH
 - If highlights look off, ensure Catppuccin is installed and selected
-- Neovim 0.9+ recommended (uses vim.api.nvim_set_option_value, treesitter APIs)
+- Neovim 0.9+ recommended (uses modern APIs)
+- Health check: `:checkhealth`
 
-## SEO
-neovim config, diffview.nvim, gitsigns.nvim, vim‑fugitive, telescope.nvim, nvim‑tree, lazy.nvim, mason.nvim, nvim‑lspconfig, nvim‑cmp, copilot, toggleterm, catppuccin, multi‑repo git, unified diff, developer productivity
+## FAQ
+- How do I revert to my old config? Move back your backup: `rm -rf ~/.config/nvim && mv ~/.config/nvim.bak ~/.config/nvim`
+- How do I disable auto‑open diff on start? See lua/config/autocmds.lua:45‑51
+
+## Search keywords
+neovim git, neovim git diff, neovim git panel, unified diff, multi repo git, neovim config, neovim setup, vim git, gitsigns.nvim, diffview.nvim, vim‑fugitive, telescope.nvim, nvim‑tree, lazy.nvim, mason.nvim, nvim‑lspconfig, nvim‑cmp, copilot, toggleterm, catppuccin, code review, staging, developer productivity
