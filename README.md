@@ -1,6 +1,6 @@
-# Neovim Git Diff Panel — Diff‑First, Multi‑Repo Neovim Config
+# Neovim Git Diff Panel — Diff‑First, Multi‑Repo Neovim Config • Built for LLMs & Coding Agents
 
-A fast, opinionated Neovim configuration that opens to a live unified Git diff panel with a project tree. Designed for code review, staging, and multi‑repo workflows. Includes Telescope, Nvim‑Tree, Gitsigns, Diffview, Fugitive, LSP (Mason + nvim‑lspconfig), nvim‑cmp + Copilot, Toggleterm, and Catppuccin.
+A fast, opinionated Neovim configuration that opens to a live unified Git diff panel with a project tree. Designed for code review, staging, and multi‑repo workflows. Optimized to pair with LLMs, code‑instruct models, and coding agents (Claude Code, ChatGPT/Codex, OpenCode, Cursor, Copilot, Aider, Code Llama, DeepSeek Coder, etc.). Includes Telescope, Nvim‑Tree, Gitsigns, Diffview, Fugitive, LSP (Mason + nvim‑lspconfig), nvim‑cmp + Copilot, Toggleterm, and Catppuccin.
 
 > Demo: add a short GIF at docs/demo.gif for best results on GitHub
 
@@ -13,6 +13,25 @@ A fast, opinionated Neovim configuration that opens to a live unified Git diff p
 - Productive defaults: Telescope, Nvim‑Tree, Toggleterm
 - LSP in minutes: Mason + LSPConfig + nvim‑cmp (+ Copilot)
 - Beautiful out of the box (Catppuccin Mocha), CUDA/PTX syntax
+
+## AI/LLM + Coding Agent Ready
+- Diff‑first layout produces clean unified patches that LLMs/agents can reason about and generate.
+- One‑keystroke jump to file/line lets you copy minimal, targeted context into chat prompts.
+- Multi‑repo aware: tame monorepos and present agents focused, curated diffs.
+- Toggleterm makes it easy to run agents and CLIs side‑by‑side (Claude Code, opencode, cursor‑agent, aider, copilot‑cli, openai tools).
+- Telescope live_grep and file pickers act as fast RAG/context retrieval for your prompts.
+- Gitsigns hunk staging maps perfectly to “apply just this change” workflows.
+- Diffview gives high‑signal review of agent‑generated branches/PRs.
+- LSP + completion support tight “fix diagnostics” and “rename/format” loops suggested by models.
+- Catppuccin theme keeps diffs readable for copy/paste into chats.
+
+### Quick recipe: pair with your LLM/agent
+1) Open your repo root and launch `nvim` (auto‑opens diff panel)  
+2) Use `<leader>gd` to focus the diff, `go` to open target lines  
+3) Pull context with Telescope (`<C-p>`, `<leader>fg`) and paste into chat  
+4) Ask your model for a unified diff or patch; apply via Toggleterm (e.g., `git apply -p0 -`)  
+5) Stage selectively with Gitsigns hunks or Fugitive  
+6) Inspect history/merges with Diffview (`<leader>gD`), then commit
 
 ## Quick start (Install)
 Prereqs: Neovim ≥ 0.9, git, ripgrep (for Telescope live_grep)
@@ -101,6 +120,7 @@ Notes
 ## FAQ
 - How do I revert to my old config? Move back your backup: `rm -rf ~/.config/nvim && mv ~/.config/nvim.bak ~/.config/nvim`
 - How do I disable auto‑open diff on start? See lua/config/autocmds.lua:45‑51
+- Does this work with Claude/ChatGPT/Cursor/OpenCode/Copilot/etc.? Yes — it’s editor/agent agnostic and designed to surface diffs and focused context fast.
 
 ## Search keywords
-neovim git, neovim git diff, neovim git panel, unified diff, multi repo git, neovim config, neovim setup, vim git, gitsigns.nvim, diffview.nvim, vim‑fugitive, telescope.nvim, nvim‑tree, lazy.nvim, mason.nvim, nvim‑lspconfig, nvim‑cmp, copilot, toggleterm, catppuccin, code review, staging, developer productivity
+neovim git, neovim git diff, neovim git panel, unified diff, multi repo git, neovim config, neovim setup, vim git, gitsigns.nvim, diffview.nvim, vim‑fugitive, telescope.nvim, nvim‑tree, lazy.nvim, mason.nvim, nvim‑lspconfig, nvim‑cmp, copilot, toggleterm, catppuccin, code review, staging, developer productivity, llm, ai pair programming, coding agents, code‑instruct models, claude code, chatgpt, openai codex, opencode, cursor, cursor‑agent, aider, copilot‑cli, code llama, deepseek coder, rag, retrieval augmented generation, patch, unified diff workflow
