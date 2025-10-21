@@ -11,6 +11,7 @@ return {
   config = function()
     local cmp = require("cmp")
     local luasnip = require("luasnip")
+    local compare = require("cmp.config.compare")
 
     cmp.setup({
       snippet = {
@@ -28,7 +29,7 @@ return {
         }),
         ["<Tab>"] = cmp.mapping(function(fallback)
           if cmp.visible() then
-            cmp.select_next_item()
+            cmp.confirm({ select = true })
           elseif luasnip.expand_or_jumpable() then
             luasnip.expand_or_jump()
           else
@@ -45,10 +46,24 @@ return {
           end
         end, { "i", "s" }),
       }),
+      sorting = {
+        priority_weight = 2,
+        comparators = {
+          require("copilot_cmp.comparators").prioritize,
+          compare.offset,
+          compare.exact,
+          compare.score,
+          compare.recently_used,
+          compare.locality,
+          compare.kind,
+          compare.length,
+          compare.order,
+        },
+      },
       sources = cmp.config.sources({
-        { name = "copilot" },
-        { name = "nvim_lsp" },
-        { name = "luasnip" },
+        { name = "copilot", group_index = 1 },
+        { name = "nvim_lsp", group_index = 2 },
+        { name = "luasnip", group_index = 2 },
       }, {
         { name = "buffer" },
         { name = "path" },
