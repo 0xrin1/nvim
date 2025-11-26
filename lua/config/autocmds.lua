@@ -60,10 +60,7 @@ local function gy_copy_with_context()
   local e = vim.fn.getpos("'>")
   local srow, scol = s[2], s[3]
   local erow, ecol = e[2], e[3]
-  if erow < srow or (erow == srow and ecol < scol) then
-    srow, erow = erow, srow
-    scol, ecol = ecol, scol
-  end
+  if erow < srow or (erow == srow and ecol < scol) then srow, erow = erow, srow; scol, ecol = ecol, scol end
   local lines = api.nvim_buf_get_lines(0, srow - 1, erow, false)
   if mode == "v" then
     if #lines == 1 then
@@ -95,5 +92,26 @@ local function gy_copy_with_context()
 end
 
 vim.keymap.set("v", "gy", gy_copy_with_context, { noremap = true, silent = true, desc = "Copy selection with context to system clipboard" })
+
+vim.keymap.set("n", "<leader>l", function()
+  require("config.opencode_chat").open()
+  vim.ui.input({ prompt = "opencode: " }, function(text)
+    if text and text ~= "" then
+      require("config.opencode_chat").send(text)
+    end
+  end)
+end, { noremap = true, silent = true, desc = "Open opencode right-rail" })
+
+vim.keymap.set("v", "<leader>l", function()
+  local esc = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
+  vim.api.nvim_feedkeys(esc, "n", false)
+  require("config.opencode_chat").open()
+  vim.ui.input({ prompt = "opencode: " }, function(text)
+    if text and text ~= "" then
+      require("config.opencode_chat").send(text, { use_visual = true })
+    end
+  end)
+end, { noremap = true, silent = true, desc = "Open opencode right-rail" })
+
 
 return M

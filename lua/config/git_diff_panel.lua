@@ -254,12 +254,16 @@ function M.open()
   vim.opt_local.showbreak = ""
   vim.bo[panel_buf].filetype = "gitfiles"
 
-  local palette = require("catppuccin.palettes").get_palette("mocha")
+  local palette = {
+    green = "#9ece6a",
+    red = "#f7768e",
+    surface0 = "#414868"
+  }
   vim.cmd('hi GitAdded guifg=' .. palette.green)
   vim.cmd('hi GitRemoved guifg=' .. palette.red)
 
   local base = vim.api.nvim_get_hl_by_name("Normal", true)
-  local normal_bg = base.background and string.format("#%06x", base.background) or "#1e1e2e"
+  local normal_bg = base.background and string.format("#%06x", base.background) or "#1a1b26"
 
   local blended_green = blend_colors(palette.green, normal_bg, 0.08)
   local blended_red = blend_colors(palette.red, normal_bg, 0.10)
@@ -362,6 +366,37 @@ function M.open()
     if col < 0 then col = 0 end
     if col > maxcol then col = maxcol end
     vim.api.nvim_win_set_cursor(winid, { line, col })
+  end
+
+  local function expand_tree_for_paths(paths)
+    if not paths or #paths == 0 then return end
+    if not (tree_buf and vim.api.nvim_buf_is_valid(tree_buf)) then return end
+    if not api.tree or type(api.tree.find_file) ~= "function" then return end
+
+    local tree_win = vim.fn.bufwinid(tree_buf)
+    if tree_win == -1 or not vim.api.nvim_win_is_valid(tree_win) then return end
+
+    local prev_win = vim.api.nvim_get_current_win()
+    local restore = prev_win ~= tree_win
+    if restore then
+      vim.api.nvim_set_current_win(tree_win)
+    end
+
+    for _, abs_path in ipairs(paths) do
+      if type(abs_path) == "string" and abs_path ~= "" then
+        local ok = pcall(api.tree.find_file, { path = abs_path, focus = false, open = false })
+        if not ok then
+          ok = pcall(api.tree.find_file, { path = abs_path, focus = false })
+        end
+        if not ok then
+          pcall(api.tree.find_file, abs_path)
+        end
+      end
+    end
+
+    if restore and vim.api.nvim_win_is_valid(prev_win) then
+      vim.api.nvim_set_current_win(prev_win)
+    end
   end
 
   local row_to_info = {}
@@ -608,6 +643,10 @@ function M.open()
     end
     local _, _, line_mapping = render_diff_buffer(diff_buf, diff_output, { filetype = override_ft, path = path })
     current_line_mapping = line_mapping or {}
+
+    if entry.abs_path then
+      expand_tree_for_paths({ entry.abs_path })
+    end
   end
 
   local function load_initial_diff()

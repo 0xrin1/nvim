@@ -7,6 +7,12 @@ return {
         width = 25,
         side = "left",
       },
+      sync_root_with_cwd = true,
+      update_focused_file = {
+        enable = true,
+        update_root = true,
+        update_cwd = true,
+      },
       renderer = {
         icons = {
           show = {

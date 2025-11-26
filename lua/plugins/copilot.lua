@@ -4,8 +4,20 @@ return {
   event = "InsertEnter",
   config = function()
     require("copilot").setup({
-      suggestion = { enabled = false },
-      panel = { enabled = false },
+      suggestion = {
+        enabled = true,
+        auto_trigger = true,
+        debounce = 75,
+        keymap = {
+          accept = "<M-l>",
+          accept_word = false,
+          accept_line = false,
+          next = "<M-]>",
+          prev = "<M-[>",
+          dismiss = "<C-]>",
+        },
+      },
+      panel = { enabled = true },
       filetypes = {
         markdown = false,
         help = false,
