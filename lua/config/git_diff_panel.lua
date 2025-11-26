@@ -558,11 +558,21 @@ function M.open()
       for _, f in ipairs(untracked) do
         if f ~= "" then
           local abs_path = path_join(repo_root, f)
-          local file_type = vim.fn.system("file -b " .. vim.fn.shellescape(abs_path)):gsub("\n", "")
           local entry
-          if file_type:find("text") then
-            local file_lines = vim.fn.systemlist("cat " .. vim.fn.shellescape(abs_path))
-            entry = { type = "file", added = #file_lines, removed = 0, is_untracked = true }
+          -- Use native Lua file reading instead of spawning processes
+          local fh = io.open(abs_path, "r")
+          if fh then
+            local content = fh:read(512) -- Read first 512 bytes to check for binary
+            fh:close()
+            local is_binary = content and content:find("\0") ~= nil
+            if is_binary then
+              entry = { type = "binary", is_untracked = true }
+            else
+              -- Count lines with wc -l (much faster than cat + lua count)
+              local wc_out = vim.fn.system("wc -l < " .. vim.fn.shellescape(abs_path))
+              local line_count = tonumber(wc_out:match("%d+")) or 0
+              entry = { type = "file", added = line_count, removed = 0, is_untracked = true }
+            end
           else
             entry = { type = "binary", is_untracked = true }
           end
