@@ -151,7 +151,8 @@ end
 -- Git Operations
 --------------------------------------------------------------------------------
 local function git_systemlist(repo_root, subcmd)
-  local cmd = string.format("git -C %s %s", vim.fn.shellescape(repo_root), subcmd)
+  -- Use --no-optional-locks to avoid lock contention and ensure fresh reads on Linux
+  local cmd = string.format("git -C %s --no-optional-locks %s", vim.fn.shellescape(repo_root), subcmd)
   return vim.fn.systemlist(cmd)
 end
 
@@ -513,6 +514,44 @@ end
 --------------------------------------------------------------------------------
 -- Diff Loading
 --------------------------------------------------------------------------------
+
+-- Core function to generate diff content (doesn't touch windows)
+local function get_diff_content(state, path, entry)
+  local diff_output = {}
+  local override_ft = resolve_filetype(path)
+
+  if entry.type == "binary" then
+    table.insert(diff_output, "Binary file differs")
+  elseif entry.is_untracked then
+    local file_lines = vim.fn.systemlist("cat " .. vim.fn.shellescape(entry.abs_path))
+    table.insert(diff_output, "diff --git a/" .. entry.repo_relpath .. " b/" .. entry.repo_relpath)
+    table.insert(diff_output, "new file mode 100644")
+    table.insert(diff_output, "--- /dev/null")
+    table.insert(diff_output, "+++ b/" .. entry.repo_relpath)
+    table.insert(diff_output, "@@ -0,0 +1," .. #file_lines .. " @@")
+    for _, fline in ipairs(file_lines) do
+      table.insert(diff_output, "+" .. fline)
+    end
+  else
+    diff_output = git_systemlist(entry.repo_root, "diff HEAD -- " .. vim.fn.shellescape(entry.repo_relpath))
+  end
+
+  return diff_output, override_ft
+end
+
+-- Update diff buffer without changing window focus (for auto-updates)
+local function update_diff_silent(state, path, entry)
+  if not path or not entry then return end
+  if not vim.api.nvim_buf_is_valid(state.diff_buf) then return end
+
+  state.resolved_path = path
+
+  local diff_output, override_ft = get_diff_content(state, path, entry)
+  local _, _, line_mapping = render_diff_buffer(state.diff_buf, diff_output, { filetype = override_ft, path = path })
+  state.current_line_mapping = line_mapping or {}
+end
+
+-- Load diff and switch focus to diff window (for interactive selection)
 local function load_diff_for_path(state, path, entry, tree_api)
   if not path or not entry then return end
 
@@ -538,25 +577,7 @@ local function load_diff_for_path(state, path, entry, tree_api)
     vim.api.nvim_win_set_buf(0, state.diff_buf)
   end
 
-  local diff_output = {}
-  local override_ft = resolve_filetype(path)
-
-  if entry.type == "binary" then
-    table.insert(diff_output, "Binary file differs")
-  elseif entry.is_untracked then
-    local file_lines = vim.fn.systemlist("cat " .. vim.fn.shellescape(entry.abs_path))
-    table.insert(diff_output, "diff --git a/" .. entry.repo_relpath .. " b/" .. entry.repo_relpath)
-    table.insert(diff_output, "new file mode 100644")
-    table.insert(diff_output, "--- /dev/null")
-    table.insert(diff_output, "+++ b/" .. entry.repo_relpath)
-    table.insert(diff_output, "@@ -0,0 +1," .. #file_lines .. " @@")
-    for _, fline in ipairs(file_lines) do
-      table.insert(diff_output, "+" .. fline)
-    end
-  else
-    diff_output = git_systemlist(entry.repo_root, "diff HEAD -- " .. vim.fn.shellescape(entry.repo_relpath))
-  end
-
+  local diff_output, override_ft = get_diff_content(state, path, entry)
   local _, _, line_mapping = render_diff_buffer(state.diff_buf, diff_output, { filetype = override_ft, path = path })
   state.current_line_mapping = line_mapping or {}
 
@@ -645,38 +666,107 @@ end
 --------------------------------------------------------------------------------
 -- File Watcher
 --------------------------------------------------------------------------------
-local function setup_watcher(state, tree_api)
+local is_linux = vim.fn.has("unix") == 1 and vim.fn.has("mac") == 0
+
+local function on_file_change(state, tree_api)
+  if not vim.api.nvim_buf_is_valid(state.panel_buf) then return end
+
+  ensure_repos(state, false)
+  refresh_panel(state)
+
+  -- Always update diff view when changes detected, regardless of current focus
+  -- Use silent update to avoid stealing focus from user
+  local p, mt = pick_latest_changed_with_mtime(state)
+  if p and state.path_to_entry[p] then
+    if mt > state.last_selected_mtime or p ~= state.resolved_path then
+      update_diff_silent(state, p, state.path_to_entry[p])
+      focus_row_for_path(state, p)
+      state.last_selected_mtime = mt
+    end
+  else
+    if vim.api.nvim_buf_is_valid(state.diff_buf) then
+      render_diff_buffer(state.diff_buf, {}, {})
+      state.resolved_path = nil
+      state.last_selected_mtime = 0
+    end
+  end
+end
+
+-- Linux: Use polling-based watcher since fs_event recursive mode doesn't work
+local POLL_INTERVAL_MS = 500
+
+local function get_all_repos_status(state)
+  local repos = ensure_repos(state, false)
+  local combined = {}
+  for _, repo_root in ipairs(repos) do
+    -- Use --no-optional-locks to avoid lock contention and ensure fresh reads
+    local cmd = string.format(
+      "git -C %s --no-optional-locks status --porcelain 2>/dev/null",
+      vim.fn.shellescape(repo_root)
+    )
+    local output = vim.fn.system(cmd)
+    table.insert(combined, repo_root .. ":" .. output)
+  end
+  return table.concat(combined, "\n")
+end
+
+local function setup_poll_watcher(state, tree_api)
+  state.poll_timer = uv.new_timer()
+
+  -- Initialize hash on first run
+  state.last_status_hash = nil
+
+  state.poll_timer:start(POLL_INTERVAL_MS, POLL_INTERVAL_MS, function()
+    -- Schedule the actual work on the main thread
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(state.panel_buf) then
+        if state.poll_timer then
+          pcall(function()
+            state.poll_timer:stop()
+            state.poll_timer:close()
+          end)
+          state.poll_timer = nil
+        end
+        return
+      end
+
+      -- Check git status for changes across all repos
+      local status_output = get_all_repos_status(state)
+      local current_hash = vim.fn.sha256(status_output)
+
+      if state.last_status_hash ~= current_hash then
+        state.last_status_hash = current_hash
+        on_file_change(state, tree_api)
+      end
+    end)
+  end)
+end
+
+-- macOS/BSD: Use native fs_event with recursive watching
+local function setup_fs_event_watcher(state, tree_api)
   state.watcher = uv.new_fs_event()
   state.watcher:start(vim.fn.getcwd(), { recursive = true }, vim.schedule_wrap(function(err)
     if err then return end
-    if not vim.api.nvim_buf_is_valid(state.panel_buf) then return end
-
-    ensure_repos(state, false)
-    refresh_panel(state)
-
-    local current_buf = vim.api.nvim_get_current_buf()
-    if current_buf == state.diff_buf then
-      local p, mt = pick_latest_changed_with_mtime(state)
-      if p and state.path_to_entry[p] then
-        if mt > state.last_selected_mtime or p ~= state.resolved_path then
-          load_diff_for_path(state, p, state.path_to_entry[p], tree_api)
-          focus_row_for_path(state, p)
-          state.last_selected_mtime = mt
-        end
-      else
-        if vim.api.nvim_buf_is_valid(state.diff_buf) then
-          render_diff_buffer(state.diff_buf, {}, {})
-          state.resolved_path = nil
-          state.last_selected_mtime = 0
-        end
-      end
-    end
+    on_file_change(state, tree_api)
   end))
+end
+
+local function setup_watcher(state, tree_api)
+  if is_linux then
+    setup_poll_watcher(state, tree_api)
+  else
+    setup_fs_event_watcher(state, tree_api)
+  end
 end
 
 local function cleanup_watcher(state)
   if state.watcher and state.watcher:is_active() then
     state.watcher:stop()
+  end
+  if state.poll_timer then
+    state.poll_timer:stop()
+    state.poll_timer:close()
+    state.poll_timer = nil
   end
 end
 

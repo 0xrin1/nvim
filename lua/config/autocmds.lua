@@ -82,9 +82,21 @@ local function gy_copy_with_context()
   end
   local header = srow == erow and (shown .. ":" .. srow) or (shown .. ":" .. srow .. "-" .. erow)
   local payload = header .. "\n\n" .. table.concat(lines, "\n")
+  -- Cross-platform clipboard support
   if vim.fn.executable("pbcopy") == 1 then
+    -- macOS
     vim.fn.system("pbcopy", payload)
+  elseif vim.fn.executable("xclip") == 1 then
+    -- Linux with xclip
+    vim.fn.system("xclip -selection clipboard", payload)
+  elseif vim.fn.executable("xsel") == 1 then
+    -- Linux with xsel
+    vim.fn.system("xsel --clipboard --input", payload)
+  elseif vim.fn.executable("wl-copy") == 1 then
+    -- Wayland
+    vim.fn.system("wl-copy", payload)
   else
+    -- Fallback to Neovim registers
     vim.fn.setreg("+", payload)
     vim.fn.setreg("*", payload)
   end
