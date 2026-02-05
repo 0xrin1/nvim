@@ -40,13 +40,13 @@ api.nvim_create_user_command("Keys", function()
 end, {})
 
 api.nvim_create_user_command("GitDiff", function()
-  require("config.git_diff_panel").open()
+  require("config.git_diff").open()
 end, {})
 
 api.nvim_create_autocmd("VimEnter", {
   callback = function()
     if vim.fn.argc() == 0 then
-      require("config.git_diff_panel").open()
+      require("config.git_diff").open()
     end
   end,
 })

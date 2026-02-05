@@ -1,4 +1,4 @@
-local diff_panel = require("config.git_diff_panel")
+local diff_panel = require("config.git_diff")
 
 return {
   "tpope/vim-fugitive",
