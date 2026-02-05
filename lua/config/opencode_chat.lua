@@ -1,10 +1,41 @@
 local M = {}
 
+local util = require("config.util")
+
 local chat_buf
 local input_buf
 local chat_win
 local input_win
 local last_ctx
+
+local function current_context(use_visual)
+  local file = vim.api.nvim_buf_get_name(0)
+  local cwd = vim.fn.getcwd()
+  local rel = util.display_path(file, cwd)
+  local pos = vim.api.nvim_win_get_cursor(0)
+  local line = pos[1]
+  local col = pos[2] + 1
+  local selection
+  if use_visual then
+    local lines = util.get_visual_lines()
+    if lines then
+      selection = table.concat(lines, "\n")
+    end
+  end
+  return { cwd = cwd, file = file, rel = rel, line = line, col = col, selection = selection }
+end
+
+local function append_chat(lines)
+  if not (chat_buf and vim.api.nvim_buf_is_valid(chat_buf)) then return end
+  local existing = vim.api.nvim_buf_get_lines(chat_buf, 0, -1, false)
+  for _, l in ipairs(type(lines) == "table" and lines or {lines}) do table.insert(existing, l) end
+  vim.api.nvim_buf_set_lines(chat_buf, 0, -1, false, existing)
+  if chat_win and vim.api.nvim_win_is_valid(chat_win) then
+    local lc = vim.api.nvim_buf_line_count(chat_buf)
+    vim.api.nvim_win_set_cursor(chat_win, { lc, 0 })
+  end
+  last_ctx = current_context()
+end
 
 local function ensure_windows()
   if chat_win and vim.api.nvim_win_is_valid(chat_win) and chat_buf and vim.api.nvim_buf_is_valid(chat_buf) and input_win and vim.api.nvim_win_is_valid(input_win) and input_buf and vim.api.nvim_buf_is_valid(input_buf) then
@@ -38,70 +69,17 @@ local function ensure_windows()
   if vim.g.opencode_header and vim.g.opencode_header ~= "" then
     append_chat({"", vim.g.opencode_header})
   end
-  vim.keymap.set("n", "q", function()
+  local function close_all()
     if chat_win and vim.api.nvim_win_is_valid(chat_win) then vim.api.nvim_win_close(chat_win, true) end
     if input_win and vim.api.nvim_win_is_valid(input_win) then vim.api.nvim_win_close(input_win, true) end
     chat_buf, input_buf, chat_win, input_win = nil, nil, nil, nil
-  end, { buffer = chat_buf, silent = true })
-  vim.keymap.set("n", "q", function()
-    if chat_win and vim.api.nvim_win_is_valid(chat_win) then vim.api.nvim_win_close(chat_win, true) end
-    if input_win and vim.api.nvim_win_is_valid(input_win) then vim.api.nvim_win_close(input_win, true) end
-    chat_buf, input_buf, chat_win, input_win = nil, nil, nil, nil
-  end, { buffer = input_buf, silent = true })
-end
-
-local function append_chat(lines)
-  if not (chat_buf and vim.api.nvim_buf_is_valid(chat_buf)) then return end
-  local existing = vim.api.nvim_buf_get_lines(chat_buf, 0, -1, false)
-  for _, l in ipairs(type(lines) == "table" and lines or {lines}) do table.insert(existing, l) end
-  vim.api.nvim_buf_set_lines(chat_buf, 0, -1, false, existing)
-  if chat_win and vim.api.nvim_win_is_valid(chat_win) then
-    local lc = vim.api.nvim_buf_line_count(chat_buf)
-    vim.api.nvim_win_set_cursor(chat_win, { lc, 0 })
   end
-  last_ctx = current_context()
-end
-
-local function current_context(use_visual)
-  local api = vim.api
-  local buf = api.nvim_get_current_buf()
-  local file = api.nvim_buf_get_name(buf)
-  local cwd = vim.fn.getcwd()
-  local rel
-  if file:sub(1, #cwd + 1) == cwd .. "/" then
-    local top = cwd:match("([^/]+)$") or cwd
-    rel = top .. "/" .. file:sub(#cwd + 2)
-  else
-    rel = file
-  end
-  local pos = api.nvim_win_get_cursor(0)
-  local line = pos[1]
-  local col = pos[2] + 1
-  local mode = use_visual and "v" or vim.fn.mode()
-  local selection
-  if mode == "v" or mode == "V" or mode == "\22" then
-    local s = vim.fn.getpos("'<")
-    local e = vim.fn.getpos("'>")
-    local srow, scol = s[2], s[3]
-    local erow, ecol = e[2], e[3]
-    if erow < srow or (erow == srow and ecol < scol) then srow, erow = erow, srow; scol, ecol = ecol, scol end
-    local lines = api.nvim_buf_get_lines(0, srow - 1, erow, false)
-    if mode == "v" then
-      if #lines == 1 then
-        lines[1] = string.sub(lines[1], scol, ecol)
-      else
-        lines[1] = string.sub(lines[1], scol)
-        lines[#lines] = string.sub(lines[#lines], 1, ecol)
-      end
-    end
-    selection = table.concat(lines, "\n")
-  end
-  return { cwd = cwd, file = file, rel = rel, line = line, col = col, selection = selection }
+  vim.keymap.set("n", "q", close_all, { buffer = chat_buf, silent = true })
+  vim.keymap.set("n", "q", close_all, { buffer = input_buf, silent = true })
 end
 
 local function send(prompt, opts)
   opts = opts or {}
-  ensure_windows()
   ensure_windows()
   local url = vim.g.opencode_server_url
   if not url or url == "" then

@@ -53,33 +53,12 @@ api.nvim_create_autocmd("VimEnter", {
 
 
 
+local util = require("config.util")
+
 local function gy_copy_with_context()
-  local mode = vim.fn.mode()
-  if mode ~= "v" and mode ~= "V" and mode ~= "\22" then return end
-  local s = vim.fn.getpos("'<")
-  local e = vim.fn.getpos("'>")
-  local srow, scol = s[2], s[3]
-  local erow, ecol = e[2], e[3]
-  if erow < srow or (erow == srow and ecol < scol) then srow, erow = erow, srow; scol, ecol = ecol, scol end
-  local lines = api.nvim_buf_get_lines(0, srow - 1, erow, false)
-  if mode == "v" then
-    if #lines == 1 then
-      lines[1] = string.sub(lines[1], scol, ecol)
-    else
-      lines[1] = string.sub(lines[1], scol)
-      lines[#lines] = string.sub(lines[#lines], 1, ecol)
-    end
-  end
-  local file = api.nvim_buf_get_name(0)
-  local cwd = vim.fn.getcwd()
-  local shown
-  if file:sub(1, #cwd + 1) == cwd .. "/" then
-    local top = cwd:match("([^/]+)$") or cwd
-    local rel = file:sub(#cwd + 2)
-    shown = top .. "/" .. rel
-  else
-    shown = file
-  end
+  local lines, srow, erow = util.get_visual_lines()
+  if not lines then return end
+  local shown = util.display_path()
   local header = srow == erow and (shown .. ":" .. srow) or (shown .. ":" .. srow .. "-" .. erow)
   local payload = header .. "\n\n" .. table.concat(lines, "\n")
   -- Cross-platform clipboard support
