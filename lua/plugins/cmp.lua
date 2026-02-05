@@ -6,7 +6,6 @@ return {
     "hrsh7th/cmp-path",
     "L3MON4D3/LuaSnip",
     "saadparwaiz1/cmp_luasnip",
-    "zbirenbaum/copilot-cmp",
   },
   config = function()
     local cmp = require("cmp")
@@ -49,7 +48,6 @@ return {
       sorting = {
         priority_weight = 2,
         comparators = {
-          require("copilot_cmp.comparators").prioritize,
           compare.offset,
           compare.exact,
           compare.score,
@@ -61,8 +59,7 @@ return {
         },
       },
       sources = cmp.config.sources({
-        { name = "copilot", group_index = 1 },
-        { name = "nvim_lsp", group_index = 2 },
+        { name = "nvim_lsp", group_index = 1 },
         { name = "luasnip", group_index = 2 },
       }, {
         { name = "buffer" },

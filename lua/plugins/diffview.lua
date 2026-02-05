@@ -69,13 +69,8 @@ return {
           local path = detect_path()
           if not path then return end
 
-          local ft = vim.filetype.match({ filename = path })
-          if not ft or ft == "diff" then
-            local ext = path:match("%.([%w]+)$")
-            if ext == "ts" then ft = "typescript" end
-            if ext == "tsx" then ft = "typescriptreact" end
-          end
-          if ft and ft ~= "diff" then
+          local ft = require("config.git_diff.util").resolve_filetype(path)
+          if ft then
             pcall(vim.api.nvim_set_option_value, "filetype", ft, { buf = bufnr })
             pcall(vim.treesitter.start, bufnr, ft)
           end
